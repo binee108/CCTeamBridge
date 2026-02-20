@@ -4,7 +4,7 @@ set -euo pipefail
 # Claude Code Hybrid Model System Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/binee108/claude-code-hybrid/main/install.sh | bash
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 BOLD="\033[1m"
 GREEN="\033[32m"
@@ -24,11 +24,44 @@ MARKER_START="# === CLAUDE HYBRID START ==="
 MARKER_END="# === CLAUDE HYBRID END ==="
 VERSION_TAG="# CLAUDE_HYBRID_VERSION="
 
+# ─── Parse arguments ───
+ARG_FORCE=""
+ARG_BACKUP=""
+for arg in "$@"; do
+    case "$arg" in
+        --force) ARG_FORCE=1 ;;
+        --backup) ARG_BACKUP=1 ;;
+    esac
+done
+
+# ─── Backup function ───
+_do_backup() {
+    local BACKUP_DIR="$HOME/.claude-hybrid-backup-$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$BACKUP_DIR"
+    local count=0
+    for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.tmux.conf" "$HOME/.tmux-hybrid-hook.sh"; do
+        [[ -f "$f" ]] && cp -p "$f" "$BACKUP_DIR/" && ((count++))
+    done
+    [[ -d "$MODELS_DIR" ]] && cp -rp "$MODELS_DIR" "$BACKUP_DIR/claude-models/" && ((count++))
+    if ((count > 0)); then
+        ok "Backed up ${count} items to $BACKUP_DIR"
+    else
+        info "Nothing to back up (fresh install)"
+    fi
+}
+
 echo ""
 echo -e "${BOLD}Claude Code Hybrid Model System v${VERSION}${RESET}"
 echo -e "Leader: Anthropic (Opus) | Teammates: Any model"
 echo "=================================================="
 echo ""
+
+# ─── Backup if requested ───
+if [[ -n "$ARG_BACKUP" ]]; then
+    info "Creating backup..."
+    _do_backup
+    echo ""
+fi
 
 # ─── Version check ───
 # Detect shell config file
@@ -64,18 +97,20 @@ if [[ -n "$INSTALLED_VERSION" ]]; then
         echo ""
         echo -e "  To force reinstall: ${BOLD}curl -fsSL ... | bash -s -- --force${RESET}"
         echo ""
-        if [[ "${1:-}" != "--force" ]]; then
+        if [[ -z "$ARG_FORCE" ]]; then
             exit 0
         fi
         warn "Force reinstall requested"
     elif _version_gt "$VERSION" "$INSTALLED_VERSION"; then
         info "Updating v${INSTALLED_VERSION} -> v${VERSION}"
+        info "Auto-backup before update..."
+        _do_backup
     else
         warn "Installed version (v${INSTALLED_VERSION}) is newer than installer (v${VERSION})"
         echo ""
         echo -e "  To force downgrade: ${BOLD}curl -fsSL ... | bash -s -- --force${RESET}"
         echo ""
-        if [[ "${1:-}" != "--force" ]]; then
+        if [[ -z "$ARG_FORCE" ]]; then
             exit 0
         fi
         warn "Force downgrade requested"
@@ -99,60 +134,95 @@ else
     exit 1
 fi
 
-# tmux (required)
-if command -v tmux &>/dev/null; then
-    ok "tmux found: $(tmux -V 2>/dev/null)"
+# tmux (required) - check multiple install paths
+TMUX_BIN=""
+for p in \
+    "$(command -v tmux 2>/dev/null)" \
+    /usr/bin/tmux \
+    /usr/local/bin/tmux \
+    /opt/homebrew/bin/tmux \
+    /snap/bin/tmux \
+    "$HOME/.local/bin/tmux" \
+    "$HOME/bin/tmux"; do
+    [[ -n "$p" && -x "$p" ]] && TMUX_BIN="$p" && break
+done
+
+if [[ -n "$TMUX_BIN" ]]; then
+    ok "tmux found: $("$TMUX_BIN" -V 2>/dev/null) ($TMUX_BIN)"
 else
     error "tmux is required but not installed"
     echo ""
+    echo "  Install tmux using one of these methods:"
+    echo ""
     case "$(uname -s)" in
         Darwin)
-            echo "  macOS:   brew install tmux"
+            echo "  Homebrew:       brew install tmux"
+            echo "  MacPorts:       sudo port install tmux"
+            echo "  Nix:            nix-env -iA nixpkgs.tmux"
             ;;
         Linux)
-            if command -v apt &>/dev/null; then
-                echo "  Ubuntu/Debian:  sudo apt install tmux"
-            elif command -v dnf &>/dev/null; then
-                echo "  Fedora/RHEL:    sudo dnf install tmux"
-            elif command -v pacman &>/dev/null; then
-                echo "  Arch Linux:     sudo pacman -S tmux"
-            elif command -v apk &>/dev/null; then
-                echo "  Alpine:         sudo apk add tmux"
-            else
-                echo "  Linux:  install tmux via your package manager"
-            fi
+            echo "  Ubuntu/Debian:  sudo apt install tmux"
+            echo "  Fedora/RHEL:    sudo dnf install tmux"
+            echo "  Arch Linux:     sudo pacman -S tmux"
+            echo "  Alpine:         sudo apk add tmux"
+            echo "  openSUSE:       sudo zypper install tmux"
+            echo "  Snap:           sudo snap install tmux --classic"
+            echo "  Nix:            nix-env -iA nixpkgs.tmux"
+            echo "  From source:    https://github.com/tmux/tmux/wiki/Installing"
             ;;
         *)
-            echo "  Install tmux for your OS: https://github.com/tmux/tmux/wiki/Installing"
+            echo "  https://github.com/tmux/tmux/wiki/Installing"
             ;;
     esac
     echo ""
     exit 1
 fi
 
-# CLIProxyAPI (optional, needed for codex/kimi)
-if command -v cli-proxy-api &>/dev/null; then
-    ok "CLIProxyAPI found"
+# CLIProxyAPI (optional, needed for codex/kimi) - check multiple install paths
+CLIPROXY_BIN=""
+for p in \
+    "$(command -v cli-proxy-api 2>/dev/null)" \
+    /usr/local/bin/cli-proxy-api \
+    /opt/homebrew/bin/cli-proxy-api \
+    "$HOME/.local/bin/cli-proxy-api" \
+    "$HOME/bin/cli-proxy-api" \
+    "$HOME/go/bin/cli-proxy-api"; do
+    [[ -n "$p" && -x "$p" ]] && CLIPROXY_BIN="$p" && break
+done
+
+if [[ -n "$CLIPROXY_BIN" ]]; then
+    ok "CLIProxyAPI found ($CLIPROXY_BIN)"
 else
     warn "CLIProxyAPI not found (optional)"
     echo ""
     echo "  CLIProxyAPI is required for Codex and Kimi models."
     echo "  If you only use GLM or other direct-API models, you can skip this."
     echo ""
+    echo "  Install using one of these methods:"
+    echo ""
     case "$(uname -s)" in
         Darwin)
-            echo "  macOS:   brew install cliproxyapi"
+            echo "  Homebrew:       brew install cliproxyapi"
+            echo "  Go:             go install github.com/router-for-me/CLIProxyAPI/cmd/server@latest"
+            echo "  Docker:         docker run --rm -p 8317:8317 cliproxyapi/cliproxyapi"
+            echo "  Binary:         https://github.com/router-for-me/CLIProxyAPI/releases"
             ;;
         Linux)
-            echo "  Linux:   curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/refs/heads/master/cliproxyapi-installer | bash"
+            echo "  One-liner:      curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/refs/heads/master/cliproxyapi-installer | bash"
+            echo "  Arch (AUR):     yay -S cli-proxy-api-bin"
+            echo "  Go:             go install github.com/router-for-me/CLIProxyAPI/cmd/server@latest"
+            echo "  Docker:         docker run --rm -p 8317:8317 cliproxyapi/cliproxyapi"
+            echo "  Binary:         https://github.com/router-for-me/CLIProxyAPI/releases"
             ;;
         *)
-            echo "  Download: https://github.com/router-for-me/CLIProxyAPI/releases"
+            echo "  Download:       https://github.com/router-for-me/CLIProxyAPI/releases"
             ;;
     esac
     echo ""
-    echo "  After install: cli-proxy-api --codex-login   (for Codex)"
-    echo "  Start proxy:   brew services start cliproxyapi"
+    echo "  After install:"
+    echo "    cli-proxy-api --codex-login          # Login to ChatGPT (for Codex)"
+    echo "    brew services start cliproxyapi       # Start proxy (macOS)"
+    echo "    systemctl --user start cliproxyapi    # Start proxy (Linux)"
     echo ""
 fi
 
