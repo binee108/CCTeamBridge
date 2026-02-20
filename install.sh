@@ -4,6 +4,8 @@ set -euo pipefail
 # Claude Code Hybrid Model System Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/binee108/claude-code-hybrid/main/install.sh | bash
 
+VERSION="1.1.0"
+
 BOLD="\033[1m"
 GREEN="\033[32m"
 YELLOW="\033[33m"
@@ -20,12 +22,67 @@ MODELS_DIR="$HOME/.claude-models"
 HOOK_PATH="$HOME/.tmux-hybrid-hook.sh"
 MARKER_START="# === CLAUDE HYBRID START ==="
 MARKER_END="# === CLAUDE HYBRID END ==="
+VERSION_TAG="# CLAUDE_HYBRID_VERSION="
 
 echo ""
-echo -e "${BOLD}Claude Code Hybrid Model System${RESET}"
+echo -e "${BOLD}Claude Code Hybrid Model System v${VERSION}${RESET}"
 echo -e "Leader: Anthropic (Opus) | Teammates: Any model"
 echo "=================================================="
 echo ""
+
+# ─── Version check ───
+# Detect shell config file
+if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == *zsh* ]]; then
+    SHELL_RC="$HOME/.zshrc"
+elif [[ -n "${BASH_VERSION:-}" ]] || [[ "$SHELL" == *bash* ]]; then
+    SHELL_RC="$HOME/.bashrc"
+else
+    SHELL_RC="$HOME/.zshrc"
+    warn "Unknown shell, defaulting to .zshrc"
+fi
+
+# Compare semver: returns 0 if $1 > $2, 1 otherwise
+_version_gt() {
+    local IFS=.
+    local i a=($1) b=($2)
+    for ((i=0; i<${#a[@]}; i++)); do
+        local va=${a[i]:-0} vb=${b[i]:-0}
+        if ((va > vb)); then return 0; fi
+        if ((va < vb)); then return 1; fi
+    done
+    return 1
+}
+
+INSTALLED_VERSION=""
+if [[ -f "$SHELL_RC" ]] && grep -q "$MARKER_START" "$SHELL_RC" 2>/dev/null; then
+    INSTALLED_VERSION=$(grep "$VERSION_TAG" "$SHELL_RC" 2>/dev/null | head -1 | sed "s/.*${VERSION_TAG}//")
+fi
+
+if [[ -n "$INSTALLED_VERSION" ]]; then
+    if [[ "$INSTALLED_VERSION" == "$VERSION" ]]; then
+        ok "Already installed (v${INSTALLED_VERSION}) - same version"
+        echo ""
+        echo -e "  To force reinstall: ${BOLD}curl -fsSL ... | bash -s -- --force${RESET}"
+        echo ""
+        if [[ "${1:-}" != "--force" ]]; then
+            exit 0
+        fi
+        warn "Force reinstall requested"
+    elif _version_gt "$VERSION" "$INSTALLED_VERSION"; then
+        info "Updating v${INSTALLED_VERSION} -> v${VERSION}"
+    else
+        warn "Installed version (v${INSTALLED_VERSION}) is newer than installer (v${VERSION})"
+        echo ""
+        echo -e "  To force downgrade: ${BOLD}curl -fsSL ... | bash -s -- --force${RESET}"
+        echo ""
+        if [[ "${1:-}" != "--force" ]]; then
+            exit 0
+        fi
+        warn "Force downgrade requested"
+    fi
+else
+    info "Fresh installation"
+fi
 
 # ─── Step 1: Model profiles directory ───
 info "Creating model profiles directory..."
@@ -127,33 +184,23 @@ if command -v tmux &>/dev/null && tmux list-sessions &>/dev/null; then
 fi
 
 # ─── Step 4: Shell functions ───
-info "Installing shell functions..."
-
-# Detect shell config file
-if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == *zsh* ]]; then
-    SHELL_RC="$HOME/.zshrc"
-elif [[ -n "${BASH_VERSION:-}" ]] || [[ "$SHELL" == *bash* ]]; then
-    SHELL_RC="$HOME/.bashrc"
-else
-    SHELL_RC="$HOME/.zshrc"
-    warn "Unknown shell, defaulting to .zshrc"
-fi
+info "Installing shell functions to $SHELL_RC..."
 
 touch "$SHELL_RC"
 
-# Check if already installed
+# Remove existing block if present (update path)
 if grep -q "$MARKER_START" "$SHELL_RC" 2>/dev/null; then
-    # Remove existing block and reinstall
     sed -i.bak "/$MARKER_START/,/$MARKER_END/d" "$SHELL_RC"
-    warn "Replacing existing hybrid functions in $SHELL_RC"
+    info "Removed previous version, installing v${VERSION}"
 fi
 
-cat >> "$SHELL_RC" << 'SHELLEOF'
-# === CLAUDE HYBRID START ===
+cat >> "$SHELL_RC" << SHELLEOF
+$MARKER_START
+${VERSION_TAG}${VERSION}
 
 # --- LLM Provider Switcher ---
 # Teammate panes with HYBRID_ACTIVE keep their model env vars
-if [[ -z "$HYBRID_ACTIVE" ]]; then
+if [[ -z "\$HYBRID_ACTIVE" ]]; then
     unset ANTHROPIC_BASE_URL
     unset ANTHROPIC_DEFAULT_OPUS_MODEL
     unset ANTHROPIC_DEFAULT_SONNET_MODEL
@@ -164,7 +211,7 @@ fi
 _claude_unset_model_vars() {
     unset HYBRID_ACTIVE ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
     unset ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL
-    if [[ -n "$TMUX" ]]; then
+    if [[ -n "\$TMUX" ]]; then
         tmux set-environment -u HYBRID_ACTIVE 2>/dev/null
         tmux set-environment -u ANTHROPIC_AUTH_TOKEN 2>/dev/null
         tmux set-environment -u ANTHROPIC_BASE_URL 2>/dev/null
@@ -175,100 +222,97 @@ _claude_unset_model_vars() {
 }
 
 _claude_load_model() {
-    local model="$1"
-    local profile="$HOME/.claude-models/${model}.env"
-    if [[ ! -f "$profile" ]]; then
-        echo "Error: Unknown model '$model'. Available:"
+    local model="\$1"
+    local profile="\$HOME/.claude-models/\${model}.env"
+    if [[ ! -f "\$profile" ]]; then
+        echo "Error: Unknown model '\$model'. Available:"
         ls ~/.claude-models/*.env 2>/dev/null | xargs -I{} basename {} .env | sed 's/^/  /'
         return 1
     fi
-    source "$profile"
-    export ANTHROPIC_AUTH_TOKEN="$MODEL_AUTH_TOKEN"
-    export ANTHROPIC_BASE_URL="$MODEL_BASE_URL"
-    export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL_HAIKU"
-    export ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL_SONNET"
-    export ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL_OPUS"
+    source "\$profile"
+    export ANTHROPIC_AUTH_TOKEN="\$MODEL_AUTH_TOKEN"
+    export ANTHROPIC_BASE_URL="\$MODEL_BASE_URL"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL="\$MODEL_HAIKU"
+    export ANTHROPIC_DEFAULT_SONNET_MODEL="\$MODEL_SONNET"
+    export ANTHROPIC_DEFAULT_OPUS_MODEL="\$MODEL_OPUS"
 }
 
 # --- cc: Claude Code solo ---
 function cc() {
     local MODEL=""
     local ARGS=()
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --model|-m) MODEL="$2"; shift 2 ;;
-            *) ARGS+=("$1"); shift ;;
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in
+            --model|-m) MODEL="\$2"; shift 2 ;;
+            *) ARGS+=("\$1"); shift ;;
         esac
     done
-    if [[ -n "$MODEL" ]]; then
-        _claude_load_model "$MODEL" || return 1
+    if [[ -n "\$MODEL" ]]; then
+        _claude_load_model "\$MODEL" || return 1
     else
         _claude_unset_model_vars
     fi
-    claude --dangerously-skip-permissions "${ARGS[@]}"
+    claude --dangerously-skip-permissions "\${ARGS[@]}"
 }
 
 # --- ct: Claude Code Teams (hybrid) ---
 ct() {
     local MODEL=""
     local WORKTREE=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --model|-m) MODEL="$2"; shift 2 ;;
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in
+            --model|-m) MODEL="\$2"; shift 2 ;;
             --worktree|-w) WORKTREE="--worktree"; shift ;;
             *) break ;;
         esac
     done
 
-    local PROJECT_DIR="$(pwd)"
-    local PROJECT_NAME="$(basename "$PROJECT_DIR")"
+    local PROJECT_DIR="\$(pwd)"
+    local PROJECT_NAME="\$(basename "\$PROJECT_DIR")"
     local SESSION="claude-teams"
 
-    if [[ -n "$MODEL" ]]; then
-        local PROFILE="$HOME/.claude-models/${MODEL}.env"
-        if [[ ! -f "$PROFILE" ]]; then
-            echo "Error: Unknown model '$MODEL'. Available:"
+    if [[ -n "\$MODEL" ]]; then
+        local PROFILE="\$HOME/.claude-models/\${MODEL}.env"
+        if [[ ! -f "\$PROFILE" ]]; then
+            echo "Error: Unknown model '\$MODEL'. Available:"
             ls ~/.claude-models/*.env 2>/dev/null | xargs -I{} basename {} .env | sed 's/^/  /'
             return 1
         fi
-        echo "$MODEL" > ~/.claude-hybrid-active
-        SESSION="claude-teams-${MODEL}"
+        echo "\$MODEL" > ~/.claude-hybrid-active
+        SESSION="claude-teams-\${MODEL}"
     else
         rm -f ~/.claude-hybrid-active
     fi
 
     # Increment session name if already exists
-    if tmux has-session -t "$SESSION" 2>/dev/null; then
+    if tmux has-session -t "\$SESSION" 2>/dev/null; then
         local i=1
-        while tmux has-session -t "${SESSION}-${i}" 2>/dev/null; do
+        while tmux has-session -t "\${SESSION}-\${i}" 2>/dev/null; do
             ((i++))
         done
-        SESSION="${SESSION}-${i}"
+        SESSION="\${SESSION}-\${i}"
     fi
 
-    tmux new-session -d -s "$SESSION" -n "$PROJECT_NAME" -c "$PROJECT_DIR"
+    tmux new-session -d -s "\$SESSION" -n "\$PROJECT_NAME" -c "\$PROJECT_DIR"
 
-    if [[ -n "$MODEL" ]]; then
-        # Model specified: keep session-level vars for teammates
-        # Leader pane only: unset via send-keys
-        tmux send-keys -t "$SESSION" \
-            "unset HYBRID_ACTIVE ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL; \
-            export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1; \
-            claude --dangerously-skip-permissions $WORKTREE --teammate-mode tmux" Enter
+    if [[ -n "\$MODEL" ]]; then
+        tmux send-keys -t "\$SESSION" \\
+            "unset HYBRID_ACTIVE ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL; \\
+            export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1; \\
+            claude --dangerously-skip-permissions \$WORKTREE --teammate-mode tmux" Enter
     else
-        # No model: remove session-level vars (all Anthropic direct)
-        tmux set-environment -t "$SESSION" -u HYBRID_ACTIVE 2>/dev/null
-        tmux set-environment -t "$SESSION" -u ANTHROPIC_AUTH_TOKEN 2>/dev/null
-        tmux set-environment -t "$SESSION" -u ANTHROPIC_BASE_URL 2>/dev/null
-        tmux set-environment -t "$SESSION" -u ANTHROPIC_DEFAULT_HAIKU_MODEL 2>/dev/null
-        tmux set-environment -t "$SESSION" -u ANTHROPIC_DEFAULT_SONNET_MODEL 2>/dev/null
-        tmux set-environment -t "$SESSION" -u ANTHROPIC_DEFAULT_OPUS_MODEL 2>/dev/null
-        tmux send-keys -t "$SESSION" \
-            "unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL; \
-            export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1; \
-            claude --dangerously-skip-permissions $WORKTREE --teammate-mode tmux" Enter
+        tmux set-environment -t "\$SESSION" -u HYBRID_ACTIVE 2>/dev/null
+        tmux set-environment -t "\$SESSION" -u ANTHROPIC_AUTH_TOKEN 2>/dev/null
+        tmux set-environment -t "\$SESSION" -u ANTHROPIC_BASE_URL 2>/dev/null
+        tmux set-environment -t "\$SESSION" -u ANTHROPIC_DEFAULT_HAIKU_MODEL 2>/dev/null
+        tmux set-environment -t "\$SESSION" -u ANTHROPIC_DEFAULT_SONNET_MODEL 2>/dev/null
+        tmux set-environment -t "\$SESSION" -u ANTHROPIC_DEFAULT_OPUS_MODEL 2>/dev/null
+        tmux send-keys -t "\$SESSION" \\
+            "unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL; \\
+            export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1; \\
+            claude --dangerously-skip-permissions \$WORKTREE --teammate-mode tmux" Enter
     fi
-    tmux attach -t "$SESSION"
+    tmux attach -t "\$SESSION"
 }
 
 # --- Aliases ---
@@ -276,14 +320,18 @@ alias cc-glm='cc --model glm'
 alias ccw='cc --worktree'
 alias ct-glm='ct --model glm'
 alias ctw='ct --worktree'
-# === CLAUDE HYBRID END ===
+$MARKER_END
 SHELLEOF
 
-ok "Installed functions to $SHELL_RC"
+ok "Installed v${VERSION} to $SHELL_RC"
 
 # ─── Done ───
 echo ""
-echo -e "${BOLD}Installation complete!${RESET}"
+if [[ -n "$INSTALLED_VERSION" ]] && [[ "$INSTALLED_VERSION" != "$VERSION" ]]; then
+    echo -e "${BOLD}Updated v${INSTALLED_VERSION} -> v${VERSION}!${RESET}"
+else
+    echo -e "${BOLD}Installation complete!${RESET}"
+fi
 echo ""
 echo "  Restart your shell or run:  source $SHELL_RC"
 echo ""
