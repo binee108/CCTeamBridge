@@ -4,7 +4,7 @@ set -euo pipefail
 # Claude Code Hybrid Model System Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/binee108/claude-code-hybrid/main/install.sh | bash
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 BOLD="\033[1m"
 GREEN="\033[32m"
@@ -82,6 +82,78 @@ if [[ -n "$INSTALLED_VERSION" ]]; then
     fi
 else
     info "Fresh installation"
+fi
+
+# ─── Prerequisites check ───
+info "Checking prerequisites..."
+
+# Claude Code CLI
+if command -v claude &>/dev/null; then
+    ok "Claude Code CLI found: $(claude --version 2>/dev/null || echo 'installed')"
+else
+    error "Claude Code CLI not found"
+    echo ""
+    echo "  Install: https://docs.anthropic.com/en/docs/claude-code"
+    echo "  npm install -g @anthropic-ai/claude-code"
+    echo ""
+    exit 1
+fi
+
+# tmux (required)
+if command -v tmux &>/dev/null; then
+    ok "tmux found: $(tmux -V 2>/dev/null)"
+else
+    error "tmux is required but not installed"
+    echo ""
+    case "$(uname -s)" in
+        Darwin)
+            echo "  macOS:   brew install tmux"
+            ;;
+        Linux)
+            if command -v apt &>/dev/null; then
+                echo "  Ubuntu/Debian:  sudo apt install tmux"
+            elif command -v dnf &>/dev/null; then
+                echo "  Fedora/RHEL:    sudo dnf install tmux"
+            elif command -v pacman &>/dev/null; then
+                echo "  Arch Linux:     sudo pacman -S tmux"
+            elif command -v apk &>/dev/null; then
+                echo "  Alpine:         sudo apk add tmux"
+            else
+                echo "  Linux:  install tmux via your package manager"
+            fi
+            ;;
+        *)
+            echo "  Install tmux for your OS: https://github.com/tmux/tmux/wiki/Installing"
+            ;;
+    esac
+    echo ""
+    exit 1
+fi
+
+# CLIProxyAPI (optional, needed for codex/kimi)
+if command -v cli-proxy-api &>/dev/null; then
+    ok "CLIProxyAPI found"
+else
+    warn "CLIProxyAPI not found (optional)"
+    echo ""
+    echo "  CLIProxyAPI is required for Codex and Kimi models."
+    echo "  If you only use GLM or other direct-API models, you can skip this."
+    echo ""
+    case "$(uname -s)" in
+        Darwin)
+            echo "  macOS:   brew install cliproxyapi"
+            ;;
+        Linux)
+            echo "  Linux:   curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/refs/heads/master/cliproxyapi-installer | bash"
+            ;;
+        *)
+            echo "  Download: https://github.com/router-for-me/CLIProxyAPI/releases"
+            ;;
+    esac
+    echo ""
+    echo "  After install: cli-proxy-api --codex-login   (for Codex)"
+    echo "  Start proxy:   brew services start cliproxyapi"
+    echo ""
 fi
 
 # ─── Step 1: Model profiles directory ───
