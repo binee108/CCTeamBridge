@@ -108,6 +108,29 @@ EOF
 chmod 600 ~/.claude-models/codex.env
 ```
 
+### Step D2 — Configure GLM API key (optional, direct provider)
+
+If you want to use GLM without CLIProxyAPI, create/update `~/.claude-models/glm.env`:
+
+```bash
+cat > ~/.claude-models/glm.env <<'EOF'
+# GLM API Profile
+MODEL_AUTH_TOKEN="YOUR_GLM_API_KEY_HERE"
+MODEL_BASE_URL="https://open.bigmodel.cn/api/anthropic"
+MODEL_HAIKU="glm-4.7-flashx"
+MODEL_SONNET="glm-5"
+MODEL_OPUS="glm-5"
+EOF
+chmod 600 ~/.claude-models/glm.env
+```
+
+Use GLM profile:
+
+```bash
+cc --model glm
+ct --model glm
+```
+
 ### Step E — Configure routing and rate-limit behavior
 
 Target config path (Homebrew):
