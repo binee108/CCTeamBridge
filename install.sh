@@ -60,13 +60,18 @@ echo ""
 
 # ─── Version check ───
 # Detect shell config file
-if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == *zsh* ]]; then
+if [[ -n "${ZSH_VERSION:-}" ]] || [[ "${SHELL:-}" == *zsh* ]]; then
     SHELL_RC="$HOME/.zshrc"
-elif [[ -n "${BASH_VERSION:-}" ]] || [[ "$SHELL" == *bash* ]]; then
+elif [[ -n "${BASH_VERSION:-}" ]] || [[ "${SHELL:-}" == *bash* ]]; then
     SHELL_RC="$HOME/.bashrc"
 else
-    SHELL_RC="$HOME/.zshrc"
-    warn "Unknown shell, defaulting to .zshrc"
+    if [[ -f "$HOME/.bashrc" ]] || [[ ! -f "$HOME/.zshrc" ]]; then
+        SHELL_RC="$HOME/.bashrc"
+    else
+        SHELL_RC="$HOME/.zshrc"
+    fi
+    warn "Unknown shell (${SHELL:-unset}), defaulting to ${SHELL_RC}."
+    warn "If you use another shell, source ${SHELL_RC} from your shell startup file."
 fi
 
 # Compare semver: returns 0 if $1 > $2, 1 otherwise
@@ -224,14 +229,22 @@ else
     exit 1
 fi
 
-# CLIProxyAPI (optional, needed for codex/kimi) - check multiple install paths
+# CLIProxyAPI (optional, needed for codex/kimi) - check command names and common install paths
 CLIPROXY_BIN=""
 for p in \
+    "$(command -v cliproxyapi 2>/dev/null)" \
     "$(command -v cli-proxy-api 2>/dev/null)" \
+    /usr/local/bin/cliproxyapi \
     /usr/local/bin/cli-proxy-api \
+    /opt/homebrew/bin/cliproxyapi \
     /opt/homebrew/bin/cli-proxy-api \
+    /usr/bin/cliproxyapi \
+    /usr/bin/cli-proxy-api \
+    "$HOME/.local/bin/cliproxyapi" \
     "$HOME/.local/bin/cli-proxy-api" \
+    "$HOME/bin/cliproxyapi" \
     "$HOME/bin/cli-proxy-api" \
+    "$HOME/go/bin/cliproxyapi" \
     "$HOME/go/bin/cli-proxy-api"; do
     [[ -n "$p" && -x "$p" ]] && CLIPROXY_BIN="$p" && break
 done
@@ -259,6 +272,13 @@ else
             echo "  Go:             go install github.com/router-for-me/CLIProxyAPI/cmd/server@latest"
             echo "  Docker:         docker run --rm -p 8317:8317 cliproxyapi/cliproxyapi"
             echo "  Binary:         https://github.com/router-for-me/CLIProxyAPI/releases"
+            if [[ -r /proc/version ]] && grep -qiE '(microsoft|wsl)' /proc/version; then
+                echo ""
+                echo "  ${YELLOW}WSL Note:${RESET} systemd may not be enabled by default."
+                echo "    - Check:      systemctl --user status 2>/dev/null"
+                echo "    - If failed:  run 'cliproxyapi' or 'cli-proxy-api' directly in a terminal"
+                echo "    - To enable:  add to /etc/wsl.conf -> [boot] -> systemd=true"
+            fi
             ;;
         *)
             echo "  Download:       https://github.com/router-for-me/CLIProxyAPI/releases"
@@ -266,9 +286,13 @@ else
     esac
     echo ""
     echo "  After install:"
-    echo "    cli-proxy-api --codex-login          # Login to ChatGPT (for Codex)"
-    echo "    brew services start cliproxyapi       # Start proxy (macOS)"
-    echo "    systemctl --user start cliproxyapi    # Start proxy (Linux)"
+    echo "    cliproxyapi -codex-login             # Preferred login command"
+    echo "    cli-proxy-api --codex-login          # Alternate command name"
+    echo ""
+    echo "  Start the proxy:"
+    echo "    macOS:      brew services start cliproxyapi"
+    echo "    Linux:      systemctl --user start cliproxyapi"
+    echo "    WSL/Manual: cliproxyapi  # (when systemd is unavailable)"
     echo ""
 fi
 
@@ -453,6 +477,147 @@ _claude_load_model() {
     export ANTHROPIC_DEFAULT_OPUS_MODEL="\$MODEL_OPUS"
 }
 
+# --- cdoctor: Validate current hybrid setup ---
+cdoctor() {
+    local ok_count=0
+    local warn_count=0
+    local err_count=0
+
+    _doctor_ok() {
+        echo "[OK]   \$1"
+        ok_count=\$((ok_count + 1))
+    }
+    _doctor_warn() {
+        echo "[WARN] \$1"
+        warn_count=\$((warn_count + 1))
+    }
+    _doctor_err() {
+        echo "[ERR]  \$1"
+        err_count=\$((err_count + 1))
+    }
+
+    echo ""
+    echo "Claude Hybrid Doctor"
+    echo "===================="
+
+    if command -v claude >/dev/null 2>&1; then
+        _doctor_ok "Claude Code CLI found: \$(claude --version 2>/dev/null || echo installed)"
+    else
+        _doctor_err "Claude Code CLI not found in PATH"
+    fi
+
+    if command -v tmux >/dev/null 2>&1; then
+        _doctor_ok "tmux found: \$(tmux -V 2>/dev/null || echo installed)"
+    else
+        _doctor_err "tmux not found in PATH"
+    fi
+
+    if [[ -d "\$HOME/.claude-models" ]]; then
+        _doctor_ok "Model profile directory exists: \$HOME/.claude-models"
+    else
+        _doctor_err "Model profile directory missing: \$HOME/.claude-models"
+    fi
+
+    for profile in glm codex kimi; do
+        if [[ -f "\$HOME/.claude-models/\${profile}.env" ]]; then
+            _doctor_ok "Profile exists: \${profile}.env"
+        else
+            _doctor_warn "Profile missing: \${profile}.env"
+        fi
+    done
+
+    if [[ -f "\$HOME/.claude-models/codex.env" ]]; then
+        local missing=0
+        for key in MODEL_AUTH_TOKEN MODEL_BASE_URL MODEL_HAIKU MODEL_SONNET MODEL_OPUS; do
+            if ! grep -q "^\${key}=\".*\"$" "\$HOME/.claude-models/codex.env" 2>/dev/null; then
+                _doctor_warn "codex.env missing or invalid key: \${key}"
+                missing=\$((missing + 1))
+            fi
+        done
+        if ((missing == 0)); then
+            _doctor_ok "codex.env required keys are present"
+        fi
+    fi
+
+    local shell_blocks=0
+    for rc in "\$HOME/.zshrc" "\$HOME/.bashrc"; do
+        if [[ -f "\$rc" ]] && grep -q "# === CLAUDE HYBRID START ===" "\$rc" 2>/dev/null; then
+            _doctor_ok "Hybrid shell block found in \${rc}"
+            shell_blocks=\$((shell_blocks + 1))
+        fi
+    done
+    if ((shell_blocks == 0)); then
+        _doctor_err "Hybrid shell block not found in ~/.zshrc or ~/.bashrc"
+    fi
+
+    if [[ -n "\${ZSH_VERSION:-}" ]] || [[ "\${SHELL:-}" == *zsh* ]]; then
+        if [[ -f "\$HOME/.zshenv" ]] && grep -q "# === CLAUDE HYBRID START ===" "\$HOME/.zshenv" 2>/dev/null; then
+            _doctor_ok "zsh teammate env block found in ~/.zshenv"
+        else
+            _doctor_warn "zsh detected but ~/.zshenv hybrid block is missing"
+        fi
+    fi
+
+    local cliproxy_bin=""
+    for p in \
+        "\$(command -v cliproxyapi 2>/dev/null)" \
+        "\$(command -v cli-proxy-api 2>/dev/null)" \
+        /usr/local/bin/cliproxyapi \
+        /usr/local/bin/cli-proxy-api \
+        /opt/homebrew/bin/cliproxyapi \
+        /opt/homebrew/bin/cli-proxy-api \
+        /usr/bin/cliproxyapi \
+        /usr/bin/cli-proxy-api \
+        "\$HOME/.local/bin/cliproxyapi" \
+        "\$HOME/.local/bin/cli-proxy-api" \
+        "\$HOME/bin/cliproxyapi" \
+        "\$HOME/bin/cli-proxy-api" \
+        "\$HOME/go/bin/cliproxyapi" \
+        "\$HOME/go/bin/cli-proxy-api"; do
+        if [[ -n "\$p" && -x "\$p" ]]; then
+            cliproxy_bin="\$p"
+            break
+        fi
+    done
+
+    if [[ -n "\$cliproxy_bin" ]]; then
+        _doctor_ok "CLIProxyAPI binary found: \${cliproxy_bin}"
+
+        if command -v brew >/dev/null 2>&1; then
+            if brew services list 2>/dev/null | grep -Eq '^cliproxyapi[[:space:]]+started'; then
+                _doctor_ok "CLIProxyAPI service started (brew services)"
+            else
+                _doctor_warn "brew services reports cliproxyapi not started"
+            fi
+        elif command -v systemctl >/dev/null 2>&1; then
+            if systemctl --user is-active cliproxyapi >/dev/null 2>&1; then
+                _doctor_ok "CLIProxyAPI service active (systemctl --user)"
+            else
+                if [[ -r /proc/version ]] && grep -qiE '(microsoft|wsl)' /proc/version; then
+                    _doctor_warn "WSL detected and cliproxyapi service is not active. systemd may be disabled; run manually."
+                else
+                    _doctor_warn "cliproxyapi service is not active (systemctl --user)"
+                fi
+            fi
+        else
+            _doctor_warn "No service manager detected. Start CLIProxyAPI manually."
+        fi
+    else
+        _doctor_warn "CLIProxyAPI binary not found (required for Codex/Kimi profiles)"
+    fi
+
+    echo ""
+    echo "Doctor Summary: OK=\${ok_count}, WARN=\${warn_count}, ERR=\${err_count}"
+
+    if ((err_count > 0)); then
+        echo "Result: FAIL"
+        return 1
+    fi
+
+    echo "Result: PASS (with warnings possible)"
+    return 0
+}
+
 # --- cc: Claude Code solo ---
 function cc() {
     local MODEL=""
@@ -582,6 +747,7 @@ echo "  ct                          # Teams (all Anthropic)"
 echo "  ct --model glm              # Teams (leader: Anthropic, teammates: GLM)"
 echo "  ct -l codex -t glm          # Teams (leader: Codex, teammates: GLM)"
 echo "  ct --leader kimi            # Teams (leader: Kimi, teammates: Anthropic)"
+echo "  cdoctor                     # Diagnose hybrid setup health"
 echo ""
 echo -e "${BOLD}Configure your API keys:${RESET}"
 echo "  vim ~/.claude-models/glm.env      # Set GLM API key"

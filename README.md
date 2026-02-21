@@ -2,7 +2,7 @@
 
 Leader uses Anthropic directly. Teammates use the model profile you choose (GLM, Codex via CLIProxyAPI, Kimi, etc.).
 
-This README is written for **AI agents** to execute setup with minimal ambiguity.
+This README supports **macOS, Linux, and WSL** with platform-specific instructions where needed.
 
 ---
 
@@ -12,11 +12,11 @@ Setup is complete only when all checks pass:
 
 1. `~/.claude-models/codex.env` exists and contains:
    - `MODEL_BASE_URL="http://127.0.0.1:8317"`
-   - `MODEL_HAIKU="gpt-5.3-codex-spark"`
+   - `MODEL_HAIKU="gpt-5.3-codex"`
    - `MODEL_SONNET="gpt-5.3-codex"`
    - `MODEL_OPUS="gpt-5.3-codex"`
 2. CLIProxyAPI service is running.
-3. `/opt/homebrew/etc/cliproxyapi.conf` has:
+3. Config file has correct settings:
    - `routing.strategy: "fill-first"`
    - `quota-exceeded.switch-project: true`
 4. Multi-account priority is set:
@@ -31,20 +31,102 @@ Setup is complete only when all checks pass:
 
 ## 2) Prerequisites
 
-- Claude Code CLI installed (`claude --version`)
-- tmux installed (`tmux -V`)
-- zsh or bash
-- macOS + Homebrew (this guide targets this environment)
+| Platform | Requirements |
+|----------|--------------|
+| **macOS** | Claude Code CLI, tmux, Homebrew |
+| **Linux** | Claude Code CLI, tmux, systemd (user sessions) |
+| **WSL** | Claude Code CLI, tmux, manual service management |
 
-If you only need GLM/direct providers, CLIProxyAPI is optional.
+Verify prerequisites:
+
+```bash
+# Check Claude Code
+claude --version
+
+# Check tmux
+tmux -V
+
+# Check shell
+echo "Shell: $SHELL"
+```
+
+> **Note:** If you only need GLM/direct providers (no Codex via CLIProxyAPI), skip Steps B-F and go directly to Step G2.
 
 ---
 
-## 3) Deterministic Setup (Agent Procedure)
+## 3) Platform Detection
+
+Run this to detect your platform and config paths:
+
+```bash
+# Detect platform
+detect_platform() {
+  case "$(uname -s)" in
+    Darwin*) echo "macos" ;;
+    Linux*)
+      if grep -qi microsoft /proc/version 2>/dev/null; then
+        echo "wsl"
+      else
+        echo "linux"
+      fi
+      ;;
+    *) echo "unknown" ;;
+  esac
+}
+
+PLATFORM=$(detect_platform)
+echo "Detected platform: $PLATFORM"
+
+# Detect CLIProxyAPI config path
+detect_config_path() {
+  local platform="$1"
+  case "$platform" in
+    macos)
+      # Homebrew on Apple Silicon
+      if [[ -f "/opt/homebrew/etc/cliproxyapi.conf" ]]; then
+        echo "/opt/homebrew/etc/cliproxyapi.conf"
+      # Homebrew on Intel Mac
+      elif [[ -f "/usr/local/etc/cliproxyapi.conf" ]]; then
+        echo "/usr/local/etc/cliproxyapi.conf"
+      else
+        echo "/opt/homebrew/etc/cliproxyapi.conf"  # default
+      fi
+      ;;
+    linux|wsl)
+      # Linux standard paths
+      if [[ -f "/etc/cliproxyapi.conf" ]]; then
+        echo "/etc/cliproxyapi.conf"
+      elif [[ -f "/usr/local/etc/cliproxyapi.conf" ]]; then
+        echo "/usr/local/etc/cliproxyapi.conf"
+      elif [[ -f "$HOME/.config/cliproxyapi/cliproxyapi.conf" ]]; then
+        echo "$HOME/.config/cliproxyapi/cliproxyapi.conf"
+      else
+        echo "/etc/cliproxyapi.conf"  # default
+      fi
+      ;;
+    *)
+      echo "/etc/cliproxyapi.conf"
+      ;;
+  esac
+}
+
+CONFIG_PATH=$(detect_config_path "$PLATFORM")
+echo "Config path: $CONFIG_PATH"
+
+# Export for later use
+export CLIPROXY_CONFIG_PATH="$CONFIG_PATH"
+export DETECTED_PLATFORM="$PLATFORM"
+```
+
+---
+
+## 4) Deterministic Setup (Agent Procedure)
 
 Execute steps in order.
 
 ### Step A — Install this project
+
+All platforms:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/binee108/claude-code-hybrid/main/install.sh | bash
@@ -60,14 +142,116 @@ else
 fi
 ```
 
-### Step B — Install and start CLIProxyAPI
+---
+
+### Step B — Install CLIProxyAPI
+
+#### macOS (Homebrew)
 
 ```bash
 brew install cliproxyapi
+```
+
+#### Linux
+
+```bash
+# Option 1: Installer script
+curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/refs/heads/master/cliproxyapi-installer | bash
+
+# Option 2: Build from source (requires Go)
+go install github.com/router-for-me/CLIProxyAPI/cmd/server@latest
+```
+
+#### WSL
+
+Use the same installation methods as Linux.
+
+For WSL environments where `systemd` is not enabled, use the manual/tmux run mode in Step C instead of `systemctl --user`.
+
+---
+
+### Step C — Start CLIProxyAPI Service
+
+#### macOS (Homebrew services)
+
+```bash
 brew services start cliproxyapi
 ```
 
-Resolve executable name:
+#### Linux (systemd user service)
+
+Create systemd user service:
+
+```bash
+mkdir -p ~/.config/systemd/user
+
+cat > ~/.config/systemd/user/cliproxyapi.service <<'EOF'
+[Unit]
+Description=CLIProxyAPI Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cliproxyapi
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+# Enable and start
+systemctl --user daemon-reload
+systemctl --user enable cliproxyapi
+systemctl --user start cliproxyapi
+```
+
+#### WSL (manual execution)
+
+WSL does not support systemd by default. Run manually or use tmux:
+
+```bash
+# Option 1: Run in foreground (for testing)
+cliproxyapi
+
+# Option 2: Run in background
+nohup cliproxyapi > ~/.cache/cliproxyapi.log 2>&1 &
+
+# Option 3: Run in tmux (recommended for persistence)
+tmux new-session -d -s cliproxyapi cliproxyapi
+```
+
+To check if running:
+
+```bash
+# Check process
+pgrep -f cliproxyapi && echo "CLIProxyAPI is running" || echo "CLIProxyAPI is NOT running"
+
+# For tmux session
+tmux list-sessions 2>/dev/null | grep cliproxyapi && echo "Found in tmux"
+```
+
+---
+
+### Step D — Verify Service Status
+
+```bash
+# Check if service is listening on port 8317
+curl -s http://127.0.0.1:8317/health 2>/dev/null && echo "Service OK" || echo "Service NOT responding"
+
+# Alternative: check port
+if command -v lsof >/dev/null 2>&1; then
+  lsof -i :8317
+elif command -v ss >/dev/null 2>&1; then
+  ss -tlnp | grep 8317
+elif command -v netstat >/dev/null 2>&1; then
+  netstat -tlnp 2>/dev/null | grep 8317
+fi
+```
+
+---
+
+### Step E — Resolve Executable Name
 
 ```bash
 if command -v cliproxyapi >/dev/null 2>&1; then
@@ -76,11 +260,16 @@ elif command -v cli-proxy-api >/dev/null 2>&1; then
   CLIPROXY_CMD="cli-proxy-api"
 else
   echo "ERROR: CLIProxyAPI command not found" >&2
+  echo "Please ensure CLIProxyAPI is installed and in PATH" >&2
   exit 1
 fi
+
+echo "CLIProxyAPI command: $CLIPROXY_CMD"
 ```
 
-### Step C — Register Codex OAuth accounts
+---
+
+### Step F — Register Codex OAuth Accounts
 
 Run once per account (repeat for each account):
 
@@ -91,28 +280,40 @@ Run once per account (repeat for each account):
 Verify files were created:
 
 ```bash
-ls -1 ~/.cli-proxy-api/codex-*.json
+ls -1 ~/.cli-proxy-api/codex-*.json 2>/dev/null || echo "No codex credential files found"
 ```
 
-### Step D — Force Codex hybrid profile
+> **Tip:** Name your files with `-plus` or `-pro` suffix for priority routing (e.g., `codex-work-plus.json`, `codex-personal-pro.json`).
+
+---
+
+### Step G — Force Codex Hybrid Profile
 
 ```bash
+mkdir -p ~/.claude-models
+
 cat > ~/.claude-models/codex.env <<'EOF'
 # Codex API Profile (CLIProxyAPI required)
 MODEL_AUTH_TOKEN="sk-dummy"
 MODEL_BASE_URL="http://127.0.0.1:8317"
-MODEL_HAIKU="gpt-5.3-codex-spark"
+MODEL_HAIKU="gpt-5.3-codex"
 MODEL_SONNET="gpt-5.3-codex"
 MODEL_OPUS="gpt-5.3-codex"
 EOF
 chmod 600 ~/.claude-models/codex.env
+
+echo "Created: ~/.claude-models/codex.env"
 ```
 
-### Step D2 — Configure GLM API key (optional, direct provider)
+---
 
-If you want to use GLM without CLIProxyAPI, create/update `~/.claude-models/glm.env`:
+### Step G2 — Configure GLM API Key (Optional)
+
+If you want to use GLM without CLIProxyAPI, create `~/.claude-models/glm.env`:
 
 ```bash
+mkdir -p ~/.claude-models
+
 cat > ~/.claude-models/glm.env <<'EOF'
 # GLM API Profile
 MODEL_AUTH_TOKEN="YOUR_GLM_API_KEY_HERE"
@@ -122,6 +323,9 @@ MODEL_SONNET="glm-5"
 MODEL_OPUS="glm-5"
 EOF
 chmod 600 ~/.claude-models/glm.env
+
+echo "Created: ~/.claude-models/glm.env"
+echo "Edit the file and add your GLM API key"
 ```
 
 Use GLM profile:
@@ -131,22 +335,51 @@ cc --model glm
 ct --model glm
 ```
 
-### Step E — Configure routing and rate-limit behavior
+---
 
-Target config path (Homebrew):
+### Step H — Configure Routing and Rate-Limit Behavior
 
-- `/opt/homebrew/etc/cliproxyapi.conf`
+First, detect the config path (from Section 3):
+
+```bash
+# If not already set, detect config path
+if [[ -z "$CLIPROXY_CONFIG_PATH" ]]; then
+  echo "ERROR: CLIPROXY_CONFIG_PATH not set. Run platform detection first." >&2
+  exit 1
+fi
+
+if [[ ! -f "$CLIPROXY_CONFIG_PATH" ]]; then
+  echo "ERROR: Config file not found: $CLIPROXY_CONFIG_PATH" >&2
+  echo "Creating default config..."
+  mkdir -p "$(dirname "$CLIPROXY_CONFIG_PATH")"
+  cat > "$CLIPROXY_CONFIG_PATH" <<'EOF'
+# CLIProxyAPI Configuration
+listen: "127.0.0.1:8317"
+request-retry: 3
+max-retry-interval: 30
+routing:
+  strategy: "fill-first"
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: true
+EOF
+fi
+```
 
 Patch required values:
 
 ```bash
 python3 - <<'PY'
-from pathlib import Path
+import os
 import re
+from pathlib import Path
 
-p = Path('/opt/homebrew/etc/cliproxyapi.conf')
+config_path = os.environ.get('CLIPROXY_CONFIG_PATH', '/etc/cliproxyapi.conf')
+p = Path(config_path)
+
 if not p.exists():
-    raise SystemExit(f"Missing config file: {p}")
+    print(f"ERROR: Config file not found: {p}")
+    exit(1)
 
 s = p.read_text()
 
@@ -180,19 +413,23 @@ else:
         s = re.sub(r'(?m)^routing\s*:\s*$','routing:\n  strategy: "fill-first"', s)
 
 p.write_text(s)
-print('patched', p)
+print(f'Patched: {p}')
 PY
 ```
 
-### Step F — Set multi-account priority (plus first, pro fallback)
+---
+
+### Step I — Set Multi-Account Priority
 
 Rules:
-- filename contains `-plus` → `priority=100`
-- filename contains `-pro` → `priority=0`
+- filename contains `-plus` → `priority=100` (used first)
+- filename contains `-pro` → `priority=0` (fallback)
 
 ```bash
 python3 - <<'PY'
-import glob, json, os
+import glob
+import json
+import os
 from pathlib import Path
 
 for f in glob.glob(os.path.expanduser('~/.cli-proxy-api/codex-*.json')):
@@ -210,75 +447,193 @@ for f in glob.glob(os.path.expanduser('~/.cli-proxy-api/codex-*.json')):
 
     data['attributes'] = attrs
     p.write_text(json.dumps(data, separators=(',', ':')))
-    print('updated', p.name)
+    print(f'Updated: {p.name}')
 PY
 ```
 
-### Step G — Restart and verify
+---
+
+### Step J — Restart Service
+
+#### macOS
 
 ```bash
 brew services restart cliproxyapi
-brew services list | grep cliproxyapi || true
+sleep 2
+brew services list | grep cliproxyapi
 ```
 
-Verify required config values:
+#### Linux (systemd)
 
 ```bash
-grep -n "request-retry\|max-retry-interval\|quota-exceeded\|switch-project\|routing\|strategy" /opt/homebrew/etc/cliproxyapi.conf
+systemctl --user restart cliproxyapi
+sleep 2
+systemctl --user status cliproxyapi --no-pager
 ```
 
-Verify priority assignment counts:
+#### WSL
 
 ```bash
-grep -R --line-number '"priority":"100"' ~/.cli-proxy-api/codex-*.json || true
-grep -R --line-number '"priority":"0"' ~/.cli-proxy-api/codex-*.json || true
+# Kill existing process
+pkill -f cliproxyapi 2>/dev/null || true
+
+# Restart in tmux
+tmux kill-session -t cliproxyapi 2>/dev/null || true
+tmux new-session -d -s cliproxyapi cliproxyapi
+
+sleep 2
+tmux list-sessions | grep cliproxyapi
 ```
 
-### Step H — API health tests
+---
 
-Model list:
+### Step K — Verification
+
+#### K1 — Verify Config Values
 
 ```bash
-curl -s http://127.0.0.1:8317/v1/models \
-  -H "Authorization: Bearer sk-dummy"
+echo "=== Checking config file: $CLIPROXY_CONFIG_PATH ==="
+
+if [[ -f "$CLIPROXY_CONFIG_PATH" ]]; then
+  echo "--- request-retry ---"
+  grep -n "request-retry" "$CLIPROXY_CONFIG_PATH" || echo "NOT FOUND"
+
+  echo "--- max-retry-interval ---"
+  grep -n "max-retry-interval" "$CLIPROXY_CONFIG_PATH" || echo "NOT FOUND"
+
+  echo "--- quota-exceeded / switch-project ---"
+  grep -n "quota-exceeded\|switch-project" "$CLIPROXY_CONFIG_PATH" || echo "NOT FOUND"
+
+  echo "--- routing / strategy ---"
+  grep -n "routing\|strategy" "$CLIPROXY_CONFIG_PATH" || echo "NOT FOUND"
+else
+  echo "ERROR: Config file not found"
+fi
 ```
 
-Completion test:
+#### K2 — Verify Priority Assignment
 
 ```bash
-curl -s http://127.0.0.1:8317/v1/chat/completions \
+echo "=== Priority counts ==="
+
+PLUS_COUNT=$(grep -l '"priority":"100"' ~/.cli-proxy-api/codex-*.json 2>/dev/null | wc -l | tr -d ' ')
+PRO_COUNT=$(grep -l '"priority":"0"' ~/.cli-proxy-api/codex-*.json 2>/dev/null | wc -l | tr -d ' ')
+
+echo "Plus accounts (priority=100): $PLUS_COUNT"
+echo "Pro accounts (priority=0): $PRO_COUNT"
+
+# Show details
+echo ""
+echo "=== Priority assignments ==="
+grep -R --line-number '"priority"' ~/.cli-proxy-api/codex-*.json 2>/dev/null || echo "No priority assignments found"
+```
+
+#### K3 — Verify Codex Env File
+
+```bash
+echo "=== Checking ~/.claude-models/codex.env ==="
+
+if [[ -f ~/.claude-models/codex.env ]]; then
+  cat ~/.claude-models/codex.env
+  echo ""
+  echo "File permissions:"
+  ls -la ~/.claude-models/codex.env
+else
+  echo "ERROR: codex.env not found"
+fi
+```
+
+---
+
+### Step L — API Health Tests
+
+#### L1 — Model List Test
+
+```bash
+echo "=== GET /v1/models ==="
+
+RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" http://127.0.0.1:8317/v1/models \
+  -H "Authorization: Bearer sk-dummy" 2>/dev/null)
+
+HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed '/HTTP_CODE:/d')
+
+if [[ "$HTTP_CODE" == "200" ]]; then
+  echo "SUCCESS (HTTP 200)"
+  echo "$BODY" | head -c 500
+else
+  echo "FAILED (HTTP $HTTP_CODE)"
+  echo "$BODY"
+fi
+```
+
+#### L2 — Completion Test
+
+```bash
+echo "=== POST /v1/chat/completions ==="
+
+RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" http://127.0.0.1:8317/v1/chat/completions \
   -H "Authorization: Bearer sk-dummy" \
   -H "Content-Type: application/json" \
   -d '{
-    "model":"gpt-5.3-codex-spark",
+    "model":"gpt-5.3-codex",
     "messages":[{"role":"user","content":"ping"}],
     "max_tokens":24
-  }'
+  }' 2>/dev/null)
+
+HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | sed '/HTTP_CODE:/d')
+
+if [[ "$HTTP_CODE" == "200" ]]; then
+  echo "SUCCESS (HTTP 200)"
+  echo "$BODY"
+else
+  echo "FAILED (HTTP $HTTP_CODE)"
+  echo "$BODY"
+fi
 ```
 
-### Step I — Launch
+---
+
+### Step M — Launch Test
 
 ```bash
-ct --model codex
+echo "=== Testing ct --model codex ==="
+
+# Verify command exists
+if ! command -v ct >/dev/null 2>&1; then
+  echo "ERROR: ct command not found. Did you run install.sh?"
+  exit 1
+fi
+
+# Show version/help to verify it works
+ct --help 2>&1 | head -20 || echo "Command failed"
+
+echo ""
+echo "To start a session, run:"
+echo "  ct --model codex"
 ```
 
 ---
 
-## 4) Operational Notes (Important)
+## 5) Operational Notes (Important)
 
-- `round-robin`: distribute requests across matching credentials.
-- `fill-first`: consume one eligible credential first, then move to next.
-- For mixed plans (plus + pro), use `fill-first` + priority for deterministic plus-first behavior.
-- `quota-exceeded.switch-project: true` is key for account switching under quota/rate-limit conditions.
-- Docs clearly define `round-robin`/`fill-first`, but do not clearly specify numeric `attributes.priority` direction.
-  - Source code (`selector.go`) uses `priority > bestPriority`, so larger numeric values win.
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `round-robin` | distributes requests | across matching credentials |
+| `fill-first` | consume one credential first | then move to next |
+| `priority=100` | for plus accounts | used first |
+| `priority=0` | for pro accounts | fallback when plus exhausted |
+| `switch-project: true` | auto-switch on quota | key for account switching |
+
+For mixed plans (plus + pro), use `fill-first` + priority for deterministic plus-first behavior.
 
 ---
 
-## 5) Commands Provided by This Project
+## 6) Commands Provided by This Project
 
 | Command | Description |
-|---|---|
+|---------|-------------|
 | `cc` | Claude Code solo (Anthropic direct) |
 | `cc --model <name>` | Claude Code solo with profile model |
 | `ct` | Teams mode (all Anthropic) |
@@ -291,12 +646,126 @@ Profiles are stored at `~/.claude-models/*.env`.
 
 ---
 
-## 6) Final Machine-Readable Report Format
+## 7) Platform-Specific Service Management
+
+### macOS (Homebrew)
+
+```bash
+# Start service
+brew services start cliproxyapi
+
+# Stop service
+brew services stop cliproxyapi
+
+# Restart service
+brew services restart cliproxyapi
+
+# Check status
+brew services list | grep cliproxyapi
+
+# View logs
+tail -f /opt/homebrew/var/log/cliproxyapi.log 2>/dev/null || \
+  tail -f /usr/local/var/log/cliproxyapi.log 2>/dev/null
+```
+
+### Linux (systemd user)
+
+```bash
+# Start service
+systemctl --user start cliproxyapi
+
+# Stop service
+systemctl --user stop cliproxyapi
+
+# Restart service
+systemctl --user restart cliproxyapi
+
+# Check status
+systemctl --user status cliproxyapi --no-pager
+
+# View logs
+journalctl --user -u cliproxyapi -f
+
+# Enable at login
+systemctl --user enable cliproxyapi
+
+# Disable at login
+systemctl --user disable cliproxyapi
+```
+
+### WSL (manual/tmux)
+
+```bash
+# Start in tmux
+tmux new-session -d -s cliproxyapi cliproxyapi
+
+# Check status
+tmux list-sessions | grep cliproxyapi
+pgrep -f cliproxyapi
+
+# Stop
+tmux kill-session -t cliproxyapi 2>/dev/null || pkill -f cliproxyapi
+
+# View logs (if logging to file)
+tail -f ~/.cache/cliproxyapi.log
+
+# Attach to tmux session
+tmux attach -t cliproxyapi
+```
+
+---
+
+## 8) Troubleshooting
+
+### Service not starting
+
+```bash
+# Check if port is already in use
+lsof -i :8317 2>/dev/null || ss -tlnp | grep 8317
+
+# Check process
+pgrep -af cliproxyapi
+
+# Check config syntax
+cliproxyapi -validate-config 2>/dev/null || echo "Config validation not supported"
+```
+
+### API returning errors
+
+```bash
+# Check service health
+curl -v http://127.0.0.1:8317/health
+
+# Check credentials exist
+ls -la ~/.cli-proxy-api/
+
+# Test with verbose output
+curl -v http://127.0.0.1:8317/v1/models \
+  -H "Authorization: Bearer sk-dummy"
+```
+
+### Commands not found
+
+```bash
+# Check PATH
+echo $PATH
+
+# Check installation
+which cc ct cliproxyapi
+
+# Reload shell config
+source ~/.zshrc 2>/dev/null || source ~/.bashrc
+```
+
+---
+
+## 9) Final Machine-Readable Report Format
 
 When an AI agent finishes setup, output exactly this structure:
 
 ```text
 [SETUP RESULT]
+Platform: macos/linux/wsl
 - install.sh: OK/FAIL
 - CLIProxyAPI service: OK/FAIL
 - codex.env updated: OK/FAIL
