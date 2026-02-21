@@ -4,7 +4,7 @@ set -euo pipefail
 # Claude Code Hybrid Model System Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/binee108/claude-code-hybrid/main/install.sh | bash
 
-VERSION="1.5.0"
+VERSION="1.6.0"
 
 BOLD="\033[1m"
 GREEN="\033[32m"
@@ -19,7 +19,6 @@ warn()  { echo -e "${YELLOW}[WARN]${RESET} $1"; }
 error() { echo -e "${RED}[ERROR]${RESET} $1"; }
 
 MODELS_DIR="$HOME/.claude-models"
-HOOK_PATH="$HOME/.tmux-hybrid-hook.sh"
 MARKER_START="# === CLAUDE HYBRID START ==="
 MARKER_END="# === CLAUDE HYBRID END ==="
 VERSION_TAG="# CLAUDE_HYBRID_VERSION="
@@ -38,9 +37,9 @@ _do_backup() {
     mkdir -p "$BACKUP_DIR"
     local count=0
     for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.tmux.conf" "$HOME/.tmux-hybrid-hook.sh"; do
-        [[ -f "$f" ]] && cp -p "$f" "$BACKUP_DIR/" && ((count++))
+        [[ -f "$f" ]] && cp -p "$f" "$BACKUP_DIR/" && count=$((count + 1))
     done
-    [[ -d "$MODELS_DIR" ]] && cp -rp "$MODELS_DIR" "$BACKUP_DIR/claude-models/" && ((count++))
+    [[ -d "$MODELS_DIR" ]] && cp -rp "$MODELS_DIR" "$BACKUP_DIR/claude-models/" && count=$((count + 1))
     if ((count > 0)); then
         ok "Backed up ${count} items to $BACKUP_DIR"
     else
@@ -50,7 +49,7 @@ _do_backup() {
 
 echo ""
 echo -e "${BOLD}Claude Code Hybrid Model System v${VERSION}${RESET}"
-echo -e "Leader: Anthropic (Opus) | Teammates: Any model"
+echo -e "Session-isolated | Leader & Teammates: Any model"
 echo "=================================================="
 echo ""
 
@@ -111,6 +110,59 @@ if [[ -n "$INSTALLED_VERSION" ]]; then
     fi
 else
     info "Fresh installation"
+fi
+
+# ─── Legacy cleanup (remove global state from pre-v1.6.0) ───
+info "Cleaning up legacy global state..."
+_legacy_cleaned=0
+
+# Remove global state file
+if [[ -f "$HOME/.claude-hybrid-active" ]]; then
+    rm -f "$HOME/.claude-hybrid-active"
+    _legacy_cleaned=$((_legacy_cleaned + 1))
+fi
+
+# Remove global hook script
+if [[ -f "$HOME/.tmux-hybrid-hook.sh" ]]; then
+    rm -f "$HOME/.tmux-hybrid-hook.sh"
+    _legacy_cleaned=$((_legacy_cleaned + 1))
+fi
+
+# Remove hook entries from tmux.conf
+if [[ -f "$HOME/.tmux.conf" ]] && grep -q 'tmux-hybrid-hook' "$HOME/.tmux.conf" 2>/dev/null; then
+    sed -i.bak '/HYBRID MODEL HOOK/d; /tmux-hybrid-hook/d' "$HOME/.tmux.conf"
+    _legacy_cleaned=$((_legacy_cleaned + 1))
+fi
+
+# Remove old-style shell blocks with different markers (pre-hybrid era)
+for RC in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    if [[ -f "$RC" ]]; then
+        if grep -q '# === LLM PROVIDER SWITCHER START ===' "$RC" 2>/dev/null; then
+            sed -i.bak '/# === LLM PROVIDER SWITCHER START ===/,/# === LLM PROVIDER SWITCHER END ===/d' "$RC"
+            _legacy_cleaned=$((_legacy_cleaned + 1))
+        fi
+        if grep -q '# === CLAUDE CODE SHORTCUTS ===' "$RC" 2>/dev/null; then
+            sed -i.bak '/# === CLAUDE CODE SHORTCUTS ===/,/# === CLAUDE CODE SHORTCUTS END ===/d' "$RC"
+            _legacy_cleaned=$((_legacy_cleaned + 1))
+        fi
+    fi
+done
+
+# Clear global tmux env vars from old hook (6 specific variables)
+if command -v tmux &>/dev/null && tmux list-sessions &>/dev/null 2>&1; then
+    tmux set-environment -gu HYBRID_ACTIVE 2>/dev/null || true
+    tmux set-environment -gu ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
+    tmux set-environment -gu ANTHROPIC_BASE_URL 2>/dev/null || true
+    tmux set-environment -gu ANTHROPIC_DEFAULT_HAIKU_MODEL 2>/dev/null || true
+    tmux set-environment -gu ANTHROPIC_DEFAULT_SONNET_MODEL 2>/dev/null || true
+    tmux set-environment -gu ANTHROPIC_DEFAULT_OPUS_MODEL 2>/dev/null || true
+    _legacy_cleaned=$((_legacy_cleaned + 1))
+fi
+
+if ((_legacy_cleaned > 0)); then
+    ok "Cleaned up ${_legacy_cleaned} legacy items"
+else
+    ok "No legacy artifacts found"
 fi
 
 # ─── Prerequisites check ───
@@ -271,52 +323,48 @@ else
     ok "kimi.env already exists, skipping"
 fi
 
-# ─── Step 2: tmux hook script ───
-info "Installing tmux hybrid hook..."
-cat > "$HOOK_PATH" << 'HOOKEOF'
-#!/bin/sh
-# tmux session-created hook: hybrid model env injection
-ACTIVE_MODEL=$(cat ~/.claude-hybrid-active 2>/dev/null)
-PROFILE="$HOME/.claude-models/${ACTIVE_MODEL}.env"
+# ─── Step 2: zshenv (non-interactive shell support) ───
+if [[ "$SHELL_RC" == *".zshrc" ]]; then
+    info "Installing teammate env override to ~/.zshenv..."
+    ZSHENV="$HOME/.zshenv"
+    touch "$ZSHENV"
 
-[ -z "$ACTIVE_MODEL" ] && exit 0
-[ ! -f "$PROFILE" ] && exit 0
+    # Remove existing block if present
+    if grep -q "$MARKER_START" "$ZSHENV" 2>/dev/null; then
+        sed -i.bak "/$MARKER_START/,/$MARKER_END/d" "$ZSHENV"
+    fi
 
-. "$PROFILE"
-
-tmux set-environment HYBRID_ACTIVE "$ACTIVE_MODEL"
-tmux set-environment ANTHROPIC_AUTH_TOKEN "$MODEL_AUTH_TOKEN"
-tmux set-environment ANTHROPIC_BASE_URL "$MODEL_BASE_URL"
-tmux set-environment ANTHROPIC_DEFAULT_HAIKU_MODEL "$MODEL_HAIKU"
-tmux set-environment ANTHROPIC_DEFAULT_SONNET_MODEL "$MODEL_SONNET"
-tmux set-environment ANTHROPIC_DEFAULT_OPUS_MODEL "$MODEL_OPUS"
-HOOKEOF
-chmod 755 "$HOOK_PATH"
-ok "Installed $HOOK_PATH"
-
-# ─── Step 3: tmux.conf hook registration ───
-info "Configuring tmux.conf..."
-TMUX_CONF="$HOME/.tmux.conf"
-touch "$TMUX_CONF"
-
-# Remove old GLM hook if present
-if grep -q 'tmux-glm-hook' "$TMUX_CONF" 2>/dev/null; then
-    sed -i.bak '/tmux-glm-hook/d' "$TMUX_CONF"
-    warn "Removed old GLM hook from tmux.conf"
+    cat >> "$ZSHENV" << 'ZSHENVEOF'
+# === CLAUDE HYBRID START ===
+# Teammate panes: force-reload model profile (runs in non-interactive shells too)
+if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ -f "$HOME/.claude-models/${HYBRID_ACTIVE}.env" ]]; then
+    source "$HOME/.claude-models/${HYBRID_ACTIVE}.env"
+    export ANTHROPIC_AUTH_TOKEN="$MODEL_AUTH_TOKEN"
+    export ANTHROPIC_BASE_URL="$MODEL_BASE_URL"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL_HAIKU"
+    export ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL_SONNET"
+    export ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL_OPUS"
+    # Fix: Claude Code CLI forwards leader's ANTHROPIC_BASE_URL to teammate
+    # via inline "env" prefix. This wrapper intercepts and replaces with
+    # the correct teammate values from the session profile.
+    env() {
+        local -a _args
+        for _a in "$@"; do
+            case "$_a" in
+                ANTHROPIC_AUTH_TOKEN=*)           _args+=("ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}") ;;
+                ANTHROPIC_BASE_URL=*)             _args+=("ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}") ;;
+                ANTHROPIC_DEFAULT_HAIKU_MODEL=*)  _args+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL}") ;;
+                ANTHROPIC_DEFAULT_SONNET_MODEL=*) _args+=("ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL}") ;;
+                ANTHROPIC_DEFAULT_OPUS_MODEL=*)   _args+=("ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL}") ;;
+                *) _args+=("$_a") ;;
+            esac
+        done
+        command env "${_args[@]}"
+    }
 fi
-
-if grep -q 'tmux-hybrid-hook' "$TMUX_CONF" 2>/dev/null; then
-    ok "Hybrid hook already in tmux.conf, skipping"
-else
-    echo '' >> "$TMUX_CONF"
-    echo '# === HYBRID MODEL HOOK ===' >> "$TMUX_CONF"
-    echo "set-hook -g session-created 'run-shell \"sh ~/.tmux-hybrid-hook.sh\"'" >> "$TMUX_CONF"
-    ok "Added hybrid hook to tmux.conf"
-fi
-
-# Reload tmux if running
-if command -v tmux &>/dev/null && tmux list-sessions &>/dev/null; then
-    tmux source-file "$TMUX_CONF" 2>/dev/null && ok "Reloaded tmux config" || warn "tmux reload failed (non-critical)"
+# === CLAUDE HYBRID END ===
+ZSHENVEOF
+    ok "Installed teammate env override to ~/.zshenv"
 fi
 
 # ─── Step 4: Shell functions ───
@@ -330,18 +378,46 @@ if grep -q "$MARKER_START" "$SHELL_RC" 2>/dev/null; then
     info "Removed previous version, installing v${VERSION}"
 fi
 
+# Part 1: Marker + version tag (common to both shells)
 cat >> "$SHELL_RC" << SHELLEOF
 $MARKER_START
 ${VERSION_TAG}${VERSION}
+SHELLEOF
+
+# Part 2: Env propagation block (bash only — zsh uses .zshenv)
+if [[ "$SHELL_RC" == *".bashrc" ]]; then
+    cat >> "$SHELL_RC" << 'BASHEOF'
 
 # --- LLM Provider Switcher ---
-# Teammate panes with HYBRID_ACTIVE keep their model env vars
-if [[ -z "\$HYBRID_ACTIVE" ]]; then
-    unset ANTHROPIC_BASE_URL
-    unset ANTHROPIC_DEFAULT_OPUS_MODEL
-    unset ANTHROPIC_DEFAULT_SONNET_MODEL
-    unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+# Teammate panes: reload model profile to override any leaked leader env vars
+if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ -f "$HOME/.claude-models/${HYBRID_ACTIVE}.env" ]]; then
+    source "$HOME/.claude-models/${HYBRID_ACTIVE}.env"
+    export ANTHROPIC_AUTH_TOKEN="$MODEL_AUTH_TOKEN"
+    export ANTHROPIC_BASE_URL="$MODEL_BASE_URL"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL_HAIKU"
+    export ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL_SONNET"
+    export ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL_OPUS"
+    # Fix: Claude Code CLI forwards leader's ANTHROPIC_BASE_URL to teammate
+    env() {
+        local -a _args
+        for _a in "$@"; do
+            case "$_a" in
+                ANTHROPIC_AUTH_TOKEN=*)           _args+=("ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}") ;;
+                ANTHROPIC_BASE_URL=*)             _args+=("ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}") ;;
+                ANTHROPIC_DEFAULT_HAIKU_MODEL=*)  _args+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL}") ;;
+                ANTHROPIC_DEFAULT_SONNET_MODEL=*) _args+=("ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL}") ;;
+                ANTHROPIC_DEFAULT_OPUS_MODEL=*)   _args+=("ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL}") ;;
+                *) _args+=("$_a") ;;
+            esac
+        done
+        command env "${_args[@]}"
+    }
 fi
+BASHEOF
+fi
+
+# Part 3: Helpers + functions (common to both shells)
+cat >> "$SHELL_RC" << SHELLEOF
 
 # --- Helpers ---
 _claude_unset_model_vars() {
@@ -359,6 +435,10 @@ _claude_unset_model_vars() {
 
 _claude_load_model() {
     local model="\$1"
+    if [[ ! "\$model" =~ ^[a-zA-Z0-9_-]+\$ ]]; then
+        echo "Error: Invalid model name '\$model' (alphanumeric, dash, underscore only)"
+        return 1
+    fi
     local profile="\$HOME/.claude-models/\${model}.env"
     if [[ ! -f "\$profile" ]]; then
         echo "Error: Unknown model '\$model'. Available:"
@@ -433,17 +513,15 @@ ct() {
     if tmux has-session -t "\$SESSION" 2>/dev/null; then
         local i=1
         while tmux has-session -t "\${SESSION}-\${i}" 2>/dev/null; do
-            ((i++))
+            i=\$((i + 1))
         done
         SESSION="\${SESSION}-\${i}"
     fi
 
-    # Clear global hybrid marker (prevent stale hook interference)
-    rm -f ~/.claude-hybrid-active
-
+    # Create session (session-scoped env only, no global state)
     tmux new-session -d -s "\$SESSION" -n "\$PROJECT_NAME" -c "\$PROJECT_DIR"
 
-    # Set teammate model in tmux session environment (inherited by teammate panes)
+    # Also set session-specific env (overrides global for this session)
     if [[ -n "\$TEAMMATE" ]]; then
         (
             source "\$HOME/.claude-models/\${TEAMMATE}.env"

@@ -22,10 +22,10 @@ echo "=============================================="
 echo ""
 
 # Remove shell functions
-for RC in "$HOME/.zshrc" "$HOME/.bashrc"; do
+for RC in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.zshenv"; do
     if [[ -f "$RC" ]] && grep -q "$MARKER_START" "$RC" 2>/dev/null; then
         sed -i.bak "/$MARKER_START/,/$MARKER_END/d" "$RC"
-        ok "Removed hybrid functions from $RC"
+        ok "Removed hybrid block from $RC"
     fi
 done
 
@@ -45,6 +45,17 @@ ok "Removed hook script"
 # Remove marker file
 rm -f "$HOME/.claude-hybrid-active"
 ok "Removed active marker"
+
+# Clear global tmux env vars
+if command -v tmux &>/dev/null && tmux list-sessions &>/dev/null 2>&1; then
+    tmux set-environment -gu HYBRID_ACTIVE 2>/dev/null || true
+    tmux set-environment -gu ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
+    tmux set-environment -gu ANTHROPIC_BASE_URL 2>/dev/null || true
+    tmux set-environment -gu ANTHROPIC_DEFAULT_HAIKU_MODEL 2>/dev/null || true
+    tmux set-environment -gu ANTHROPIC_DEFAULT_SONNET_MODEL 2>/dev/null || true
+    tmux set-environment -gu ANTHROPIC_DEFAULT_OPUS_MODEL 2>/dev/null || true
+    ok "Cleared global tmux env vars"
+fi
 
 echo ""
 echo -e "${YELLOW}Kept:${RESET} ~/.claude-models/ (your API keys are safe)"
