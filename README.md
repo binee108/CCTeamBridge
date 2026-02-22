@@ -1,4 +1,4 @@
-# Claude Code Hybrid Model System
+# CCTeamBridge
 
 Leader uses Anthropic directly. Teammates use the model profile you choose (GLM, Codex via CLIProxyAPI, Kimi, etc.).
 
@@ -129,7 +129,7 @@ Execute steps in order.
 All platforms:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/binee108/claude-code-hybrid/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/binee108/CCTeamBridge/main/install.sh | bash
 ```
 
 Reload shell:

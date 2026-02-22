@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Claude Code Hybrid Model System Uninstaller
+# CCTeamBridge Uninstaller
 
 BOLD="\033[1m"
 GREEN="\033[32m"
@@ -17,7 +17,7 @@ MARKER_START="# === CLAUDE HYBRID START ==="
 MARKER_END="# === CLAUDE HYBRID END ==="
 
 echo ""
-echo -e "${BOLD}Uninstalling Claude Code Hybrid Model System${RESET}"
+echo -e "${BOLD}Uninstalling CCTeamBridge${RESET}"
 echo "=============================================="
 echo ""
 

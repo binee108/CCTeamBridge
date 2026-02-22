@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Claude Code Hybrid Model System Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/binee108/claude-code-hybrid/main/install.sh | bash
+# CCTeamBridge Installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/binee108/CCTeamBridge/main/install.sh | bash
 
 VERSION="1.6.0"
 
@@ -48,7 +48,7 @@ _do_backup() {
 }
 
 echo ""
-echo -e "${BOLD}Claude Code Hybrid Model System v${VERSION}${RESET}"
+echo -e "${BOLD}CCTeamBridge v${VERSION}${RESET}"
 echo -e "Session-isolated | Leader & Teammates: Any model"
 echo "=================================================="
 echo ""
