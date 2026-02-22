@@ -367,6 +367,7 @@ if [[ "$SHELL_RC" == *".zshrc" ]]; then
 # Teammate panes: force-reload model profile (runs in non-interactive shells too)
 if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ -f "$HOME/.claude-models/${HYBRID_ACTIVE}.env" ]]; then
     source "$HOME/.claude-models/${HYBRID_ACTIVE}.env"
+    # NOTE: RR token-selection logic is duplicated in zshenv/bashrc blocks; keep both blocks in sync when editing.
     if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
         _HYBRID_TOKEN_CANDIDATES="${MODEL_AUTH_TOKENS:-${MODEL_AUTH_TOKEN:-}}"
         _HYBRID_RR_COUNT=0
@@ -472,6 +473,7 @@ if [[ "$SHELL_RC" == *".bashrc" ]]; then
 # Teammate panes: reload model profile to override any leaked leader env vars
 if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ -f "$HOME/.claude-models/${HYBRID_ACTIVE}.env" ]]; then
     source "$HOME/.claude-models/${HYBRID_ACTIVE}.env"
+    # NOTE: RR token-selection logic is duplicated in zshenv/bashrc blocks; keep both blocks in sync when editing.
     if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
         _HYBRID_TOKEN_CANDIDATES="${MODEL_AUTH_TOKENS:-${MODEL_AUTH_TOKEN:-}}"
         _HYBRID_RR_COUNT=0
@@ -803,6 +805,10 @@ function cc() {
     while [[ \$# -gt 0 ]]; do
         case "\$1" in
             --model|-m) MODEL="\$2"; shift 2 ;;
+            --)
+                ARGS+=("\$@")
+                break
+                ;;
             *) ARGS+=("\$1"); shift ;;
         esac
     done
@@ -818,36 +824,22 @@ function cc() {
 ct() {
     local LEADER=""
     local TEAMMATE=""
-    local USE_WORKTREE=0
-    local WORKTREE_NAME=""
+    local CLAUDE_ARGS=()
 
     while [[ \$# -gt 0 ]]; do
         case "\$1" in
             --leader|-l) LEADER="\$2"; shift 2 ;;
             --teammate|-t) TEAMMATE="\$2"; shift 2 ;;
-            --model|-m) TEAMMATE="\$2"; shift 2 ;;
-            --worktree|-w)
-                USE_WORKTREE=1
-                if [[ -n "\${2:-}" ]] && [[ "\${2:-}" != -* ]]; then
-                    WORKTREE_NAME="\$2"
-                    shift 2
-                else
-                    shift
-                fi
+            --)
+                CLAUDE_ARGS+=("\$@")
+                break
                 ;;
-            --worktree=*)
-                USE_WORKTREE=1
-                WORKTREE_NAME="\${1#*=}"
+            *)
+                CLAUDE_ARGS+=("\$1")
                 shift
                 ;;
-            *) break ;;
         esac
     done
-
-    if [[ -n "\$WORKTREE_NAME" && ! "\$WORKTREE_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-        echo "Error: Invalid worktree name '\$WORKTREE_NAME' (letters, numbers, dot, dash, underscore only)"
-        return 1
-    fi
 
     # Validate model profiles
     if [[ -n "\$LEADER" && ! -f "\$HOME/.claude-models/\${LEADER}.env" ]]; then
@@ -907,12 +899,10 @@ ct() {
     fi
 
     local CLAUDE_CMD="claude --dangerously-skip-permissions --teammate-mode tmux"
-    if ((USE_WORKTREE)); then
-        CLAUDE_CMD+=" --worktree"
-        if [[ -n "\$WORKTREE_NAME" ]]; then
-            CLAUDE_CMD+=" \"\$WORKTREE_NAME\""
-        fi
-    fi
+    local _claude_arg
+    for _claude_arg in "\${CLAUDE_ARGS[@]}"; do
+        CLAUDE_CMD+=" \$(printf '%q' "\$_claude_arg")"
+    done
 
     # Launch leader pane
     if [[ -n "\$LEADER" ]]; then
@@ -931,8 +921,6 @@ ct() {
 }
 
 # --- Aliases ---
-alias cc-glm='cc --model glm'
-alias ct-glm='ct --model glm'
 $MARKER_END
 SHELLEOF
 
@@ -952,7 +940,7 @@ echo -e "${BOLD}Usage:${RESET}"
 echo "  cc                          # Claude Code (Anthropic direct)"
 echo "  cc --model glm              # Claude Code with GLM"
 echo "  ct                          # Teams (all Anthropic)"
-echo "  ct --model glm              # Teams (leader: Anthropic, teammates: GLM)"
+echo "  ct --teammate glm           # Teams (leader: Anthropic, teammates: GLM)"
 echo "  ct -l codex -t glm          # Teams (leader: Codex, teammates: GLM)"
 echo "  ct --leader kimi            # Teams (leader: Kimi, teammates: Anthropic)"
 echo "  cdoctor                     # Diagnose hybrid setup health"

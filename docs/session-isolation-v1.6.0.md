@@ -8,8 +8,9 @@ v1.6.0 redesigns the `ct` command to support **concurrent sessions with differen
 
 ```bash
 ct -l codex -t glm       # Leader: Codex, Teammates: GLM
-ct --model glm            # Leader: Anthropic, Teammates: GLM
+ct --teammate glm            # Leader: Anthropic, Teammates: GLM
 ct -l glm -t codex        # Leader: GLM, Teammates: Codex
+ct --worktree my-feature  # Teams in isolated Claude worktree
 ct                         # Leader: Anthropic, Teammates: Anthropic
 ```
 
@@ -22,7 +23,7 @@ All combinations can run concurrently without interference.
 ### Architecture Before v1.6.0
 
 ```
-ct --model glm
+ct --teammate glm
   ├── echo "glm" > ~/.claude-hybrid-active        # Global file (PROBLEM)
   ├── tmux new-session
   │     └── tmux hook (session-created)
@@ -43,11 +44,11 @@ ct --model glm
 ### Example: Race Condition
 
 ```
-Terminal 1: ct --model glm
+Terminal 1: ct --teammate glm
   → writes "glm" to ~/.claude-hybrid-active
   → creates tmux session
 
-Terminal 2: ct --model codex           # Before Terminal 1's hook fires
+Terminal 2: ct --teammate codex           # Before Terminal 1's hook fires
   → writes "codex" to ~/.claude-hybrid-active   # OVERWRITES "glm"
   → creates tmux session
 
@@ -95,8 +96,8 @@ The `ct` function now accepts separate `--leader` and `--teammate` flags:
 
 ```bash
 ct() {
-    # Parse --leader/-l and --teammate/-t separately
-    # --model/-m is an alias for --teammate (backward compatible)
+    # Parse --leader/-l and --teammate/-t at wrapper level
+    # Forward other flags to Claude CLI (e.g., --worktree)
 
     # Session env = teammate model (inherited by new panes)
     tmux set-environment -t "$SESSION" HYBRID_ACTIVE "$TEAMMATE"
@@ -113,7 +114,7 @@ ct() {
 
 ```
 ct                          → claude-teams
-ct --model glm              → claude-teams-glm
+ct --teammate glm              → claude-teams-glm
 ct -l codex -t glm          → claude-teams-codex-glm
 ct -l glm -t codex          → claude-teams-glm-codex
 ```
@@ -123,7 +124,7 @@ If a session name already exists, a numeric suffix is appended:
 claude-teams-glm            → claude-teams-glm-1 → claude-teams-glm-2
 ```
 
-Note: tmux uses prefix matching for session targets (`-t`). When `claude-teams-glm-glm` exists, `tmux has-session -t claude-teams-glm` matches it as a prefix. This causes `ct --model glm` to see a "conflict" and increment to `claude-teams-glm-1`. This is cosmetic and does not affect isolation.
+Note: tmux uses prefix matching for session targets (`-t`). When `claude-teams-glm-glm` exists, `tmux has-session -t claude-teams-glm` matches it as a prefix. This causes `ct --teammate glm` to see a "conflict" and increment to `claude-teams-glm-1`. This is cosmetic and does not affect isolation.
 
 ---
 
@@ -384,8 +385,8 @@ tmux set-environment -gu ANTHROPIC_DEFAULT_OPUS_MODEL
 | Scenario | Leader | Teammate | Session Env | Tested |
 |---|---|---|---|---|
 | `ct` | Anthropic | Anthropic | (unset) | Yes |
-| `ct --model glm` (single key) | Anthropic | GLM | GLM (+ pane token RR) | Yes |
-| `ct --model glm` (multi key RR) | Anthropic | GLM | GLM (+ pane token RR) | Yes |
+| `ct --teammate glm` (single key) | Anthropic | GLM | GLM (+ pane token RR) | Yes |
+| `ct --teammate glm` (multi key RR) | Anthropic | GLM | GLM (+ pane token RR) | Yes |
 | `ct -l codex -t glm` | Codex | GLM | GLM | Yes |
 | `ct -l glm -t glm` | GLM | GLM | GLM | Yes |
 | `ct -l glm` | GLM | Anthropic | (unset) | Yes |
@@ -401,15 +402,15 @@ tmux set-environment -gu ANTHROPIC_DEFAULT_OPUS_MODEL
    - `bash -n install.sh`
    - `bash -n uninstall.sh`
 2. Backward compatibility
-   - Set only `MODEL_AUTH_TOKEN` and run `ct --model glm`
+   - Set only `MODEL_AUTH_TOKEN` and run `ct --teammate glm`
 3. Multi-key round-robin (pane-level)
    - Set `MODEL_AUTH_TOKENS` with 3 keys
-   - Start one `ct --model glm` session and create multiple panes
+   - Start one `ct --teammate glm` session and create multiple panes
    - In each pane, run `echo "$ANTHROPIC_AUTH_TOKEN"` and confirm rotation by pane creation order
 4. Pane token pinning
    - In a single pane, run additional commands and confirm token value stays unchanged for that pane
 5. Concurrency sanity
-   - Launch multiple `ct --model glm` and/or create panes in short intervals
+   - Launch multiple `ct --teammate glm` and/or create panes in short intervals
    - Confirm key selection continues to rotate per pane/shell creation (best-effort file updates, no lock dependency)
 
 Operational note: if concurrent session count exceeds key count, key sharing is expected by design.

@@ -25,7 +25,7 @@ Setup is complete only when all checks pass:
 5. API tests succeed:
    - `GET /v1/models`
    - `POST /v1/chat/completions`
-6. `ct --model codex` launches successfully.
+6. `ct --teammate codex` launches successfully.
 
 ---
 
@@ -344,10 +344,10 @@ Use GLM profile:
 
 ```bash
 cc --model glm
-ct --model glm
+ct --teammate glm
 ```
 
-`ct --model glm` (또는 `ct --teammate glm`)은 teammate pane(shell) 시작 시 `MODEL_AUTH_TOKENS`를 우선 사용해 key를 round-robin으로 1개 선택해 pane의 `ANTHROPIC_AUTH_TOKEN`에 설정합니다.
+`ct --teammate glm`은 teammate pane(shell) 시작 시 `MODEL_AUTH_TOKENS`를 우선 사용해 key를 round-robin으로 1개 선택해 pane의 `ANTHROPIC_AUTH_TOKEN`에 설정합니다.
 
 - 상태 파일: `~/.claude-models/.hybrid-rr/<model>.idx`
 - `MODEL_AUTH_TOKENS`가 없거나 비어 있으면 `MODEL_AUTH_TOKEN`으로 fallback합니다.
@@ -530,22 +530,22 @@ bash -n uninstall.sh
 #### K0.1 — Single-key Backward Compatibility
 
 - Configure only `MODEL_AUTH_TOKEN` in `~/.claude-models/glm.env`.
-- Run `ct --model glm` and confirm teammate sessions work exactly as before.
+- Run `ct --teammate glm` and confirm teammate sessions work exactly as before.
 
 #### K0.2 — Multi-key Round-robin Assignment (Pane-level)
 
 - Configure `MODEL_AUTH_TOKENS` with 3 keys in `~/.claude-models/glm.env`.
-- Start one session (`ct --model glm`) and create multiple panes.
+- Start one session (`ct --teammate glm`) and create multiple panes.
 - In each pane, run `echo "$ANTHROPIC_AUTH_TOKEN"` and verify token assignment rotates per pane creation.
 
 #### K0.3 — Pane Token Pinning
 
-- In one running `ct --model glm` session, pick a pane and run `echo "$ANTHROPIC_AUTH_TOKEN"`.
+- In one running `ct --teammate glm` session, pick a pane and run `echo "$ANTHROPIC_AUTH_TOKEN"`.
 - Execute additional commands in the same pane and confirm the token value remains unchanged for that pane.
 
 #### K0.4 — Concurrency Check
 
-- Launch multiple `ct --model glm` commands and/or create panes in short intervals.
+- Launch multiple `ct --teammate glm` commands and/or create panes in short intervals.
 - Verify key selection rotates per pane/shell creation in short-interval concurrent launches (best-effort file updates).
 
 #### K1 — Verify Config Values
@@ -657,7 +657,7 @@ fi
 ### Step M — Launch Test
 
 ```bash
-echo "=== Testing ct --model codex ==="
+echo "=== Testing ct --teammate codex ==="
 
 # Verify command exists
 if ! command -v ct >/dev/null 2>&1; then
@@ -670,7 +670,7 @@ ct --help 2>&1 | head -20 || echo "Command failed"
 
 echo ""
 echo "To start a session, run:"
-echo "  ct --model codex"
+echo "  ct --teammate codex"
 ```
 
 ---
@@ -696,9 +696,8 @@ For mixed plans (plus + pro), use `fill-first` + priority for deterministic plus
 | `cc` | Claude Code solo (Anthropic direct) |
 | `cc --model <name>` | Claude Code solo with profile model |
 | `ct` | Teams mode (all Anthropic) |
-| `ct --model <name>` | Teams (leader: Anthropic, teammates: profile model) |
 | `ct --leader <name>` | Teams (leader: profile model, teammates: Anthropic) |
-| `ct --teammate <name>` | Same as `--model` |
+| `ct --teammate <name>` | Teams (leader: Anthropic, teammates: profile model) |
 | `ct -l <name> -t <name>` | Teams (leader and teammates each use different models) |
 | `ct -w` / `ct --worktree [name]` | Start Teams in a new Claude worktree (optional name) |
 
