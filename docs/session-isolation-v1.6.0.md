@@ -68,8 +68,8 @@ ct -l codex -t glm
   ├── tmux new-session -s "claude-teams-codex-glm"
   ├── tmux set-environment -t "claude-teams-codex-glm" HYBRID_ACTIVE "glm"
   ├── tmux set-environment -t "claude-teams-codex-glm" ANTHROPIC_BASE_URL "https://..."
-  ├── tmux set-environment -t "claude-teams-codex-glm" ANTHROPIC_AUTH_TOKEN "..."
   ├── tmux set-environment -t "claude-teams-codex-glm" ANTHROPIC_DEFAULT_*_MODEL "..."
+  ├── teammate pane shell startup resolves ANTHROPIC_AUTH_TOKEN via RR
   ├── tmux send-keys "_claude_load_model codex && ... claude --teammate-mode tmux"
   └── tmux attach
 ```
@@ -155,12 +155,20 @@ Layer 3: env() wrapper
 
 ```bash
 tmux set-environment -t "$SESSION" HYBRID_ACTIVE "$TEAMMATE"
-tmux set-environment -t "$SESSION" ANTHROPIC_AUTH_TOKEN "$TOKEN"
 tmux set-environment -t "$SESSION" ANTHROPIC_BASE_URL "$URL"
-# ... etc
+tmux set-environment -t "$SESSION" ANTHROPIC_DEFAULT_*_MODEL "..."
+# ANTHROPIC_AUTH_TOKEN is resolved per pane at shell startup
 ```
 
-When a new pane is created in this session, it inherits these session-scoped variables. The pane's shell (started by tmux) receives `HYBRID_ACTIVE=glm` in its environment.
+`$TOKEN` is selected at pane(shell)-startup time:
+
+- Prefer `MODEL_AUTH_TOKENS` (comma-separated list) from the teammate profile
+- Fallback to `MODEL_AUTH_TOKEN` when multi-key is unset/empty
+- Pick exactly one key per new pane/shell via round-robin
+- Persist round-robin state at `~/.claude-models/.hybrid-rr/<model>.idx`
+- Update the index file without locks (best-effort under concurrent launches, avoids lock-related deadlock risk)
+
+When a new pane is created in this session, it inherits session-scoped model selectors (`HYBRID_ACTIVE`, URL/model names). Then pane startup logic resolves `ANTHROPIC_AUTH_TOKEN` via round-robin.
 
 ### Layer 2: Shell Startup (.zshenv / .bashrc)
 
@@ -169,7 +177,14 @@ When a new pane is created in this session, it inherits these session-scoped var
 if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && \
    [[ -f "$HOME/.claude-models/${HYBRID_ACTIVE}.env" ]]; then
     source "$HOME/.claude-models/${HYBRID_ACTIVE}.env"
-    export ANTHROPIC_AUTH_TOKEN="$MODEL_AUTH_TOKEN"
+
+    # Keep pane-local token pinned; resolve only if empty
+    if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+        # MODEL_AUTH_TOKENS preferred, MODEL_AUTH_TOKEN fallback
+        # (first non-empty token is used)
+        export ANTHROPIC_AUTH_TOKEN="..."
+    fi
+
     export ANTHROPIC_BASE_URL="$MODEL_BASE_URL"
     export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL_HAIKU"
     export ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL_SONNET"
@@ -341,6 +356,7 @@ The installer automatically removes artifacts from pre-v1.6.0 installations:
 | `~/.tmux-hybrid-hook.sh` | `rm -f` |
 | tmux.conf hook entries | `sed` remove lines |
 | Global tmux env vars (6) | `tmux set-environment -gu` |
+| `~/.claude-models/.hybrid-rr` round-robin state | `rm -rf` |
 | `# === LLM PROVIDER SWITCHER START/END ===` in RC | `sed` remove block |
 | `# === CLAUDE CODE SHORTCUTS/END ===` in RC | `sed` remove block |
 
@@ -368,11 +384,32 @@ tmux set-environment -gu ANTHROPIC_DEFAULT_OPUS_MODEL
 | Scenario | Leader | Teammate | Session Env | Tested |
 |---|---|---|---|---|
 | `ct` | Anthropic | Anthropic | (unset) | Yes |
-| `ct --model glm` | Anthropic | GLM | GLM | Yes |
+| `ct --model glm` (single key) | Anthropic | GLM | GLM (+ pane token RR) | Yes |
+| `ct --model glm` (multi key RR) | Anthropic | GLM | GLM (+ pane token RR) | Yes |
 | `ct -l codex -t glm` | Codex | GLM | GLM | Yes |
 | `ct -l glm -t glm` | GLM | GLM | GLM | Yes |
 | `ct -l glm` | GLM | Anthropic | (unset) | Yes |
 | Concurrent sessions | Independent | Independent | Isolated | Yes |
+| Pane token remains pinned after assignment | - | Yes | Isolated | Yes |
 | Path traversal `../..` | - | - | Blocked | Yes |
 | Special chars `a;rm` | - | - | Blocked | Yes |
 | `env` wrapper intercept | - | Correct URL | - | Yes |
+
+### Verification Procedure (Round-robin and pinning)
+
+1. Static checks
+   - `bash -n install.sh`
+   - `bash -n uninstall.sh`
+2. Backward compatibility
+   - Set only `MODEL_AUTH_TOKEN` and run `ct --model glm`
+3. Multi-key round-robin (pane-level)
+   - Set `MODEL_AUTH_TOKENS` with 3 keys
+   - Start one `ct --model glm` session and create multiple panes
+   - In each pane, run `echo "$ANTHROPIC_AUTH_TOKEN"` and confirm rotation by pane creation order
+4. Pane token pinning
+   - In a single pane, run additional commands and confirm token value stays unchanged for that pane
+5. Concurrency sanity
+   - Launch multiple `ct --model glm` and/or create panes in short intervals
+   - Confirm key selection continues to rotate per pane/shell creation (best-effort file updates, no lock dependency)
+
+Operational note: if concurrent session count exceeds key count, key sharing is expected by design.

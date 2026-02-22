@@ -46,6 +46,12 @@ ok "Removed hook script"
 rm -f "$HOME/.claude-hybrid-active"
 ok "Removed active marker"
 
+# Remove round-robin state artifacts
+if [[ -d "$HOME/.claude-models/.hybrid-rr" ]]; then
+    rm -rf "$HOME/.claude-models/.hybrid-rr"
+    ok "Removed round-robin state directory"
+fi
+
 # Clear global tmux env vars
 if command -v tmux &>/dev/null && tmux list-sessions &>/dev/null 2>&1; then
     tmux set-environment -gu HYBRID_ACTIVE 2>/dev/null || true

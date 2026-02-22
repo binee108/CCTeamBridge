@@ -306,6 +306,8 @@ if [[ ! -f "$MODELS_DIR/glm.env" ]]; then
     cat > "$MODELS_DIR/glm.env" << 'EOF'
 # GLM API Profile
 # Get your API key at: https://open.bigmodel.cn/
+# Optional multi-key for teammate round-robin (comma-separated)
+# MODEL_AUTH_TOKENS="GLM_KEY_1,GLM_KEY_2,GLM_KEY_3"
 MODEL_AUTH_TOKEN="YOUR_GLM_API_KEY_HERE"
 MODEL_BASE_URL="https://open.bigmodel.cn/api/anthropic"
 MODEL_HAIKU="glm-4.7-flashx"
@@ -365,7 +367,59 @@ if [[ "$SHELL_RC" == *".zshrc" ]]; then
 # Teammate panes: force-reload model profile (runs in non-interactive shells too)
 if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ -f "$HOME/.claude-models/${HYBRID_ACTIVE}.env" ]]; then
     source "$HOME/.claude-models/${HYBRID_ACTIVE}.env"
-    export ANTHROPIC_AUTH_TOKEN="$MODEL_AUTH_TOKEN"
+    if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+        _HYBRID_TOKEN_CANDIDATES="${MODEL_AUTH_TOKENS:-${MODEL_AUTH_TOKEN:-}}"
+        _HYBRID_RR_COUNT=0
+
+        if [[ -n "$_HYBRID_TOKEN_CANDIDATES" ]]; then
+            while IFS= read -r _HYBRID_TOKEN_ITEM; do
+                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM#"${_HYBRID_TOKEN_ITEM%%[![:space:]]*}"}"
+                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM%"${_HYBRID_TOKEN_ITEM##*[![:space:]]}"}"
+                if [[ -n "$_HYBRID_TOKEN_ITEM" ]]; then
+                    _HYBRID_RR_COUNT=$((_HYBRID_RR_COUNT + 1))
+                fi
+            done < <(printf '%s\n' "$_HYBRID_TOKEN_CANDIDATES" | tr ',' '\n')
+        fi
+
+        if ((_HYBRID_RR_COUNT > 0)); then
+            _HYBRID_RR_DIR="$HOME/.claude-models/.hybrid-rr"
+            _HYBRID_RR_IDX_FILE="${_HYBRID_RR_DIR}/${HYBRID_ACTIVE}.idx"
+            _HYBRID_RR_INDEX=0
+
+            if [[ -f "$_HYBRID_RR_IDX_FILE" ]]; then
+                read -r _HYBRID_RR_INDEX < "$_HYBRID_RR_IDX_FILE" || _HYBRID_RR_INDEX=0
+            fi
+            if [[ ! "$_HYBRID_RR_INDEX" =~ ^[0-9]+$ ]]; then
+                _HYBRID_RR_INDEX=0
+            fi
+
+            _HYBRID_RR_INDEX=$((_HYBRID_RR_INDEX % _HYBRID_RR_COUNT))
+            _HYBRID_RR_POS=0
+            _HYBRID_RR_SELECTED=""
+
+            while IFS= read -r _HYBRID_TOKEN_ITEM; do
+                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM#"${_HYBRID_TOKEN_ITEM%%[![:space:]]*}"}"
+                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM%"${_HYBRID_TOKEN_ITEM##*[![:space:]]}"}"
+                if [[ -n "$_HYBRID_TOKEN_ITEM" ]]; then
+                    if ((_HYBRID_RR_POS == _HYBRID_RR_INDEX)); then
+                        _HYBRID_RR_SELECTED="$_HYBRID_TOKEN_ITEM"
+                        break
+                    fi
+                    _HYBRID_RR_POS=$((_HYBRID_RR_POS + 1))
+                fi
+            done < <(printf '%s\n' "$_HYBRID_TOKEN_CANDIDATES" | tr ',' '\n')
+
+            if [[ -n "$_HYBRID_RR_SELECTED" ]]; then
+                export ANTHROPIC_AUTH_TOKEN="$_HYBRID_RR_SELECTED"
+            fi
+
+            _HYBRID_RR_NEXT=$(((_HYBRID_RR_INDEX + 1) % _HYBRID_RR_COUNT))
+            mkdir -p "$_HYBRID_RR_DIR"
+            printf '%s\n' "$_HYBRID_RR_NEXT" > "$_HYBRID_RR_IDX_FILE" 2>/dev/null || true
+        fi
+
+        unset _HYBRID_TOKEN_CANDIDATES _HYBRID_TOKEN_ITEM _HYBRID_RR_COUNT _HYBRID_RR_DIR _HYBRID_RR_IDX_FILE _HYBRID_RR_INDEX _HYBRID_RR_POS _HYBRID_RR_SELECTED _HYBRID_RR_NEXT
+    fi
     export ANTHROPIC_BASE_URL="$MODEL_BASE_URL"
     export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL_HAIKU"
     export ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL_SONNET"
@@ -418,7 +472,59 @@ if [[ "$SHELL_RC" == *".bashrc" ]]; then
 # Teammate panes: reload model profile to override any leaked leader env vars
 if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ -f "$HOME/.claude-models/${HYBRID_ACTIVE}.env" ]]; then
     source "$HOME/.claude-models/${HYBRID_ACTIVE}.env"
-    export ANTHROPIC_AUTH_TOKEN="$MODEL_AUTH_TOKEN"
+    if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
+        _HYBRID_TOKEN_CANDIDATES="${MODEL_AUTH_TOKENS:-${MODEL_AUTH_TOKEN:-}}"
+        _HYBRID_RR_COUNT=0
+
+        if [[ -n "$_HYBRID_TOKEN_CANDIDATES" ]]; then
+            while IFS= read -r _HYBRID_TOKEN_ITEM; do
+                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM#"${_HYBRID_TOKEN_ITEM%%[![:space:]]*}"}"
+                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM%"${_HYBRID_TOKEN_ITEM##*[![:space:]]}"}"
+                if [[ -n "$_HYBRID_TOKEN_ITEM" ]]; then
+                    _HYBRID_RR_COUNT=$((_HYBRID_RR_COUNT + 1))
+                fi
+            done < <(printf '%s\n' "$_HYBRID_TOKEN_CANDIDATES" | tr ',' '\n')
+        fi
+
+        if ((_HYBRID_RR_COUNT > 0)); then
+            _HYBRID_RR_DIR="$HOME/.claude-models/.hybrid-rr"
+            _HYBRID_RR_IDX_FILE="${_HYBRID_RR_DIR}/${HYBRID_ACTIVE}.idx"
+            _HYBRID_RR_INDEX=0
+
+            if [[ -f "$_HYBRID_RR_IDX_FILE" ]]; then
+                read -r _HYBRID_RR_INDEX < "$_HYBRID_RR_IDX_FILE" || _HYBRID_RR_INDEX=0
+            fi
+            if [[ ! "$_HYBRID_RR_INDEX" =~ ^[0-9]+$ ]]; then
+                _HYBRID_RR_INDEX=0
+            fi
+
+            _HYBRID_RR_INDEX=$((_HYBRID_RR_INDEX % _HYBRID_RR_COUNT))
+            _HYBRID_RR_POS=0
+            _HYBRID_RR_SELECTED=""
+
+            while IFS= read -r _HYBRID_TOKEN_ITEM; do
+                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM#"${_HYBRID_TOKEN_ITEM%%[![:space:]]*}"}"
+                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM%"${_HYBRID_TOKEN_ITEM##*[![:space:]]}"}"
+                if [[ -n "$_HYBRID_TOKEN_ITEM" ]]; then
+                    if ((_HYBRID_RR_POS == _HYBRID_RR_INDEX)); then
+                        _HYBRID_RR_SELECTED="$_HYBRID_TOKEN_ITEM"
+                        break
+                    fi
+                    _HYBRID_RR_POS=$((_HYBRID_RR_POS + 1))
+                fi
+            done < <(printf '%s\n' "$_HYBRID_TOKEN_CANDIDATES" | tr ',' '\n')
+
+            if [[ -n "$_HYBRID_RR_SELECTED" ]]; then
+                export ANTHROPIC_AUTH_TOKEN="$_HYBRID_RR_SELECTED"
+            fi
+
+            _HYBRID_RR_NEXT=$(((_HYBRID_RR_INDEX + 1) % _HYBRID_RR_COUNT))
+            mkdir -p "$_HYBRID_RR_DIR"
+            printf '%s\n' "$_HYBRID_RR_NEXT" > "$_HYBRID_RR_IDX_FILE" 2>/dev/null || true
+        fi
+
+        unset _HYBRID_TOKEN_CANDIDATES _HYBRID_TOKEN_ITEM _HYBRID_RR_COUNT _HYBRID_RR_DIR _HYBRID_RR_IDX_FILE _HYBRID_RR_INDEX _HYBRID_RR_POS _HYBRID_RR_SELECTED _HYBRID_RR_NEXT
+    fi
     export ANTHROPIC_BASE_URL="$MODEL_BASE_URL"
     export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL_HAIKU"
     export ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL_SONNET"
@@ -459,6 +565,72 @@ _claude_unset_model_vars() {
     fi
 }
 
+_claude_collect_model_tokens_from_loaded_env() {
+    local _raw_tokens="\${MODEL_AUTH_TOKENS:-\${MODEL_AUTH_TOKEN:-}}"
+    local _tok
+    local _trimmed
+
+    [[ -z "\$_raw_tokens" ]] && return 0
+
+    while IFS= read -r _tok; do
+        _trimmed="\${_tok#"\${_tok%%[![:space:]]*}"}"
+        _trimmed="\${_trimmed%"\${_trimmed##*[![:space:]]}"}"
+        [[ -n "\$_trimmed" ]] && printf '%s\n' "\$_trimmed"
+    done < <(printf '%s\n' "\$_raw_tokens" | tr ',' '\n')
+}
+
+_claude_first_model_token_from_loaded_env() {
+    local _first
+    _first="\$(_claude_collect_model_tokens_from_loaded_env | head -n 1)"
+    [[ -n "\$_first" ]] && printf '%s' "\$_first"
+}
+
+_claude_select_rr_token_for_model() {
+    local model="\$1"
+    local profile="\$HOME/.claude-models/\${model}.env"
+    local rr_dir="\$HOME/.claude-models/.hybrid-rr"
+    local idx_file="\${rr_dir}/\${model}.idx"
+    local tokens=()
+    local count=0
+    local idx=0
+    local token=""
+    local next_idx=0
+
+    if [[ -z "\$model" ]] || [[ ! "\$model" =~ ^[a-zA-Z0-9_-]+\$ ]] || [[ ! -f "\$profile" ]]; then
+        return 1
+    fi
+
+    source "\$profile"
+    while IFS= read -r token; do
+        tokens+=("\$token")
+    done < <(_claude_collect_model_tokens_from_loaded_env)
+
+    count=\${#tokens[@]}
+    if ((count == 0)); then
+        return 1
+    fi
+
+    mkdir -p "\$rr_dir"
+
+    if [[ -f "\$idx_file" ]]; then
+        read -r idx < "\$idx_file" || idx=0
+    else
+        idx=0
+    fi
+
+    if [[ ! "\$idx" =~ ^[0-9]+\$ ]]; then
+        idx=0
+    fi
+
+    idx=\$((idx % count))
+    token="\${tokens[idx]}"
+    next_idx=\$(((idx + 1) % count))
+
+    printf '%s\n' "\$next_idx" > "\$idx_file" 2>/dev/null || true
+    printf '%s' "\$token"
+    return 0
+}
+
 _claude_load_model() {
     local model="\$1"
     if [[ ! "\$model" =~ ^[a-zA-Z0-9_-]+\$ ]]; then
@@ -472,7 +644,9 @@ _claude_load_model() {
         return 1
     fi
     source "\$profile"
-    export ANTHROPIC_AUTH_TOKEN="\$MODEL_AUTH_TOKEN"
+    local _selected_token=""
+    _selected_token="\$(_claude_first_model_token_from_loaded_env)"
+    export ANTHROPIC_AUTH_TOKEN="\$_selected_token"
     export ANTHROPIC_BASE_URL="\$MODEL_BASE_URL"
     export ANTHROPIC_DEFAULT_HAIKU_MODEL="\$MODEL_HAIKU"
     export ANTHROPIC_DEFAULT_SONNET_MODEL="\$MODEL_SONNET"
@@ -644,14 +818,36 @@ function cc() {
 ct() {
     local LEADER=""
     local TEAMMATE=""
+    local USE_WORKTREE=0
+    local WORKTREE_NAME=""
+
     while [[ \$# -gt 0 ]]; do
         case "\$1" in
             --leader|-l) LEADER="\$2"; shift 2 ;;
             --teammate|-t) TEAMMATE="\$2"; shift 2 ;;
             --model|-m) TEAMMATE="\$2"; shift 2 ;;
+            --worktree|-w)
+                USE_WORKTREE=1
+                if [[ -n "\${2:-}" ]] && [[ "\${2:-}" != -* ]]; then
+                    WORKTREE_NAME="\$2"
+                    shift 2
+                else
+                    shift
+                fi
+                ;;
+            --worktree=*)
+                USE_WORKTREE=1
+                WORKTREE_NAME="\${1#*=}"
+                shift
+                ;;
             *) break ;;
         esac
     done
+
+    if [[ -n "\$WORKTREE_NAME" && ! "\$WORKTREE_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        echo "Error: Invalid worktree name '\$WORKTREE_NAME' (letters, numbers, dot, dash, underscore only)"
+        return 1
+    fi
 
     # Validate model profiles
     if [[ -n "\$LEADER" && ! -f "\$HOME/.claude-models/\${LEADER}.env" ]]; then
@@ -695,7 +891,7 @@ ct() {
         (
             source "\$HOME/.claude-models/\${TEAMMATE}.env"
             tmux set-environment -t "\$SESSION" HYBRID_ACTIVE "\$TEAMMATE"
-            tmux set-environment -t "\$SESSION" ANTHROPIC_AUTH_TOKEN "\$MODEL_AUTH_TOKEN"
+            tmux set-environment -t "\$SESSION" -u ANTHROPIC_AUTH_TOKEN 2>/dev/null
             tmux set-environment -t "\$SESSION" ANTHROPIC_BASE_URL "\$MODEL_BASE_URL"
             tmux set-environment -t "\$SESSION" ANTHROPIC_DEFAULT_HAIKU_MODEL "\$MODEL_HAIKU"
             tmux set-environment -t "\$SESSION" ANTHROPIC_DEFAULT_SONNET_MODEL "\$MODEL_SONNET"
@@ -710,17 +906,25 @@ ct() {
         tmux set-environment -t "\$SESSION" -u ANTHROPIC_DEFAULT_OPUS_MODEL 2>/dev/null
     fi
 
+    local CLAUDE_CMD="claude --dangerously-skip-permissions --teammate-mode tmux"
+    if ((USE_WORKTREE)); then
+        CLAUDE_CMD+=" --worktree"
+        if [[ -n "\$WORKTREE_NAME" ]]; then
+            CLAUDE_CMD+=" \"\$WORKTREE_NAME\""
+        fi
+    fi
+
     # Launch leader pane
     if [[ -n "\$LEADER" ]]; then
         tmux send-keys -t "\$SESSION" \\
             "_claude_load_model \$LEADER && \\
             export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 && \\
-            claude --dangerously-skip-permissions --teammate-mode tmux" Enter
+            \$CLAUDE_CMD" Enter
     else
         tmux send-keys -t "\$SESSION" \\
             "unset HYBRID_ACTIVE ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL; \\
             export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1; \\
-            claude --dangerously-skip-permissions --teammate-mode tmux" Enter
+            \$CLAUDE_CMD" Enter
     fi
 
     tmux attach -t "\$SESSION"

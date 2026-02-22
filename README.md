@@ -325,6 +325,9 @@ mkdir -p ~/.claude-models
 
 cat > ~/.claude-models/glm.env <<'EOF'
 # GLM API Profile
+# Optional multi-key for teammate round-robin (comma-separated)
+MODEL_AUTH_TOKENS="YOUR_GLM_API_KEY_1,YOUR_GLM_API_KEY_2,YOUR_GLM_API_KEY_3"
+# Backward-compatible fallback (used if MODEL_AUTH_TOKENS is unset/empty)
 MODEL_AUTH_TOKEN="YOUR_GLM_API_KEY_HERE"
 MODEL_BASE_URL="https://open.bigmodel.cn/api/anthropic"
 MODEL_HAIKU="glm-4.7-flashx"
@@ -343,6 +346,13 @@ Use GLM profile:
 cc --model glm
 ct --model glm
 ```
+
+`ct --model glm` (또는 `ct --teammate glm`)은 teammate pane(shell) 시작 시 `MODEL_AUTH_TOKENS`를 우선 사용해 key를 round-robin으로 1개 선택해 pane의 `ANTHROPIC_AUTH_TOKEN`에 설정합니다.
+
+- 상태 파일: `~/.claude-models/.hybrid-rr/<model>.idx`
+- `MODEL_AUTH_TOKENS`가 없거나 비어 있으면 `MODEL_AUTH_TOKEN`으로 fallback합니다.
+- 토큰 원문은 로그/출력에 노출하지 마세요.
+- 동시 pane/session 생성 수가 key 수보다 많아도 생성 시점마다 round-robin으로 계속 순환 배정됩니다(키 공유 가능).
 
 ---
 
@@ -510,6 +520,34 @@ tmux list-sessions | grep cliproxyapi
 
 ### Step K — Verification
 
+#### K0 — Hybrid Installer/Uninstaller Static Checks
+
+```bash
+bash -n install.sh
+bash -n uninstall.sh
+```
+
+#### K0.1 — Single-key Backward Compatibility
+
+- Configure only `MODEL_AUTH_TOKEN` in `~/.claude-models/glm.env`.
+- Run `ct --model glm` and confirm teammate sessions work exactly as before.
+
+#### K0.2 — Multi-key Round-robin Assignment (Pane-level)
+
+- Configure `MODEL_AUTH_TOKENS` with 3 keys in `~/.claude-models/glm.env`.
+- Start one session (`ct --model glm`) and create multiple panes.
+- In each pane, run `echo "$ANTHROPIC_AUTH_TOKEN"` and verify token assignment rotates per pane creation.
+
+#### K0.3 — Pane Token Pinning
+
+- In one running `ct --model glm` session, pick a pane and run `echo "$ANTHROPIC_AUTH_TOKEN"`.
+- Execute additional commands in the same pane and confirm the token value remains unchanged for that pane.
+
+#### K0.4 — Concurrency Check
+
+- Launch multiple `ct --model glm` commands and/or create panes in short intervals.
+- Verify key selection rotates per pane/shell creation in short-interval concurrent launches (best-effort file updates).
+
 #### K1 — Verify Config Values
 
 ```bash
@@ -662,6 +700,7 @@ For mixed plans (plus + pro), use `fill-first` + priority for deterministic plus
 | `ct --leader <name>` | Teams (leader: profile model, teammates: Anthropic) |
 | `ct --teammate <name>` | Same as `--model` |
 | `ct -l <name> -t <name>` | Teams (leader and teammates each use different models) |
+| `ct -w` / `ct --worktree [name]` | Start Teams in a new Claude worktree (optional name) |
 
 Profiles are stored at `~/.claude-models/*.env`.
 
