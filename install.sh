@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Ensure running with bash (not sh)
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "Error: This script requires bash. Run with: bash $0" >&2
+    exit 1
+fi
+
 # CCTeamBridge Installer
 # Usage: curl -fsSLo ./install.sh https://raw.githubusercontent.com/binee108/CCTeamBridge/main/install.sh && chmod +x ./install.sh && bash ./install.sh
 
@@ -17,6 +23,9 @@ info()  { echo -e "${CYAN}[INFO]${RESET} $1"; }
 ok()    { echo -e "${GREEN}[OK]${RESET} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${RESET} $1"; }
 error() { echo -e "${RED}[ERROR]${RESET} $1"; }
+
+# Interrupt handler for cleanup
+trap 'warn "Interrupted! Partial installation may exist."; exit 130' INT
 
 _has_tty_prompt() {
     [[ -r /dev/tty ]]
@@ -813,7 +822,7 @@ fi
 if [[ "$SHELL_RC" == *".zshrc" ]]; then
     info "Installing teammate env override to ~/.zshenv..."
     ZSHENV="$HOME/.zshenv"
-    touch "$ZSHENV"
+    touch "$ZSHENV" 2>/dev/null || { error "Cannot write to $ZSHENV (check permissions)"; exit 1; }
 
     # Remove existing block if present
     if grep -q "$MARKER_START" "$ZSHENV" 2>/dev/null; then
@@ -888,7 +897,8 @@ if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[
     # via inline "env" prefix. This wrapper intercepts and replaces with
     # the correct teammate values from the session profile.
     env() {
-        local -a _args
+        local _args
+        _args=()
         for _a in "$@"; do
             case "$_a" in
                 ANTHROPIC_AUTH_TOKEN=*)           _args+=("ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}") ;;
@@ -910,7 +920,7 @@ fi
 # ─── Step 4: Shell functions ───
 info "Installing shell functions to $SHELL_RC..."
 
-touch "$SHELL_RC"
+touch "$SHELL_RC" 2>/dev/null || { error "Cannot write to $SHELL_RC (check permissions)"; exit 1; }
 
 # Remove existing block if present (update path)
 if grep -q "$MARKER_START" "$SHELL_RC" 2>/dev/null; then
@@ -993,7 +1003,8 @@ if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[
     export ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL_OPUS"
     # Fix: Claude Code CLI forwards leader's ANTHROPIC_BASE_URL to teammate
     env() {
-        local -a _args
+        local _args
+        _args=()
         for _a in "$@"; do
             case "$_a" in
                 ANTHROPIC_AUTH_TOKEN=*)           _args+=("ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}") ;;
@@ -1346,7 +1357,14 @@ ct() {
     fi
 
     # Create session (session-scoped env only, no global state)
-    tmux new-session -d -s "\$SESSION" -n "\$PROJECT_NAME" -c "\$PROJECT_DIR"
+    tmux new-session -d -s "\$SESSION" -n "\$PROJECT_NAME" -c "\$PROJECT_DIR" || {
+        echo "Error: Failed to create tmux session '\$SESSION'"
+        return 1
+    }
+    if ! tmux has-session -t "\$SESSION" 2>/dev/null; then
+        echo "Error: tmux session '\$SESSION' was not created"
+        return 1
+    fi
 
     # Also set session-specific env (overrides global for this session)
     if [[ -n "\$TEAMMATE" ]]; then

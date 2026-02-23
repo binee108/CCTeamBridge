@@ -25,6 +25,7 @@ echo ""
 for RC in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.zshenv"; do
     if [[ -f "$RC" ]] && grep -q "$MARKER_START" "$RC" 2>/dev/null; then
         sed -i.bak "/$MARKER_START/,/$MARKER_END/d" "$RC"
+        rm -f "${RC}.bak"
         ok "Removed hybrid block from $RC"
     fi
 done
@@ -33,6 +34,7 @@ done
 if [[ -f "$HOME/.tmux.conf" ]]; then
     if grep -q 'tmux-hybrid-hook' "$HOME/.tmux.conf"; then
         sed -i.bak '/HYBRID MODEL HOOK/d; /tmux-hybrid-hook/d' "$HOME/.tmux.conf"
+        rm -f "$HOME/.tmux.conf.bak"
         ok "Removed hook from tmux.conf"
     fi
     tmux source-file "$HOME/.tmux.conf" 2>/dev/null || true
