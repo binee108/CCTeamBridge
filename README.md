@@ -1,843 +1,201 @@
 # CCTeamBridge
 
-Leader uses Anthropic directly. Teammates use the model profile you choose (GLM, Codex via CLIProxyAPI, Kimi, etc.).
+Leader는 Anthropic 직접 연결, Teammate는 원하는 모델 프로필(Codex, GLM, Kimi 등)을 사용합니다.
 
-This README supports **macOS, Linux, and WSL** with platform-specific instructions where needed.
-
----
-
-## 1) Goal (Definition of Done)
-
-Setup is complete only when all checks pass:
-
-1. `~/.claude-models/codex.env` exists and contains:
-   - `MODEL_BASE_URL="http://127.0.0.1:8317"`
-   - `MODEL_HAIKU="gpt-5.3-codex"`
-   - `MODEL_SONNET="gpt-5.3-codex"`
-   - `MODEL_OPUS="gpt-5.3-codex"`
-2. CLIProxyAPI service is running.
-3. Config file has correct settings:
-   - `routing.strategy: "fill-first"`
-   - `quota-exceeded.switch-project: true`
-4. Multi-account priority is set:
-   - plus accounts: `"priority":"100"`
-   - pro accounts: `"priority":"0"`
-5. API tests succeed:
-   - `GET /v1/models`
-   - `POST /v1/chat/completions`
-6. `ct --teammate codex` launches successfully.
+macOS, Linux, WSL 모두 지원합니다.
 
 ---
 
-## 2) Prerequisites
+## 설치
 
-| Platform | Requirements |
-|----------|--------------|
-| **macOS** | Claude Code CLI, tmux, Homebrew |
-| **Linux** | Claude Code CLI, tmux, systemd (user sessions) |
-| **WSL** | Claude Code CLI, tmux, manual service management |
+### 1. CLIProxyAPI 설치 (Codex/Kimi 사용 시 필수)
 
-Verify prerequisites:
-
-```bash
-# Check Claude Code
-claude --version
-
-# Check tmux
-tmux -V
-
-# Check shell
-echo "Shell: $SHELL"
-```
-
-> **Note:** If you only need GLM/direct providers (no Codex via CLIProxyAPI), skip Steps B-F and go directly to Step G2.
-
----
-
-## 3) Platform Detection
-
-Run this to detect your platform and config paths:
-
-```bash
-# Detect platform
-detect_platform() {
-  case "$(uname -s)" in
-    Darwin*) echo "macos" ;;
-    Linux*)
-      if grep -qi microsoft /proc/version 2>/dev/null; then
-        echo "wsl"
-      else
-        echo "linux"
-      fi
-      ;;
-    *) echo "unknown" ;;
-  esac
-}
-
-PLATFORM=$(detect_platform)
-echo "Detected platform: $PLATFORM"
-
-# Detect CLIProxyAPI config path
-detect_config_path() {
-  local platform="$1"
-  case "$platform" in
-    macos)
-      # Homebrew on Apple Silicon
-      if [[ -f "/opt/homebrew/etc/cliproxyapi.conf" ]]; then
-        echo "/opt/homebrew/etc/cliproxyapi.conf"
-      # Homebrew on Intel Mac
-      elif [[ -f "/usr/local/etc/cliproxyapi.conf" ]]; then
-        echo "/usr/local/etc/cliproxyapi.conf"
-      else
-        echo "/opt/homebrew/etc/cliproxyapi.conf"  # default
-      fi
-      ;;
-    linux|wsl)
-      # Linux standard paths
-      if [[ -f "/etc/cliproxyapi.conf" ]]; then
-        echo "/etc/cliproxyapi.conf"
-      elif [[ -f "/usr/local/etc/cliproxyapi.conf" ]]; then
-        echo "/usr/local/etc/cliproxyapi.conf"
-      elif [[ -f "$HOME/.config/cliproxyapi/cliproxyapi.conf" ]]; then
-        echo "$HOME/.config/cliproxyapi/cliproxyapi.conf"
-      else
-        echo "/etc/cliproxyapi.conf"  # default
-      fi
-      ;;
-    *)
-      echo "/etc/cliproxyapi.conf"
-      ;;
-  esac
-}
-
-CONFIG_PATH=$(detect_config_path "$PLATFORM")
-echo "Config path: $CONFIG_PATH"
-
-# Export for later use
-export CLIPROXY_CONFIG_PATH="$CONFIG_PATH"
-export DETECTED_PLATFORM="$PLATFORM"
-```
-
----
-
-## 4) Deterministic Setup (Agent Procedure)
-
-Execute steps in order.
-
-### Step A — Install this project
-
-All platforms:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/binee108/CCTeamBridge/main/install.sh | bash
-```
-
-Reload shell:
-
-```bash
-if [ -n "${ZSH_VERSION:-}" ] || [[ "$SHELL" == *"zsh"* ]]; then
-  source ~/.zshrc
-else
-  source ~/.bashrc
-fi
-```
-
----
-
-### Step B — Install CLIProxyAPI
-
-#### macOS (Homebrew)
+**macOS:**
 
 ```bash
 brew install cliproxyapi
 ```
 
-#### Linux
+**Linux / WSL:**
+
+외부 스크립트 원격 실행 명령은 제공하지 않습니다.
+CLIProxyAPI 공식 저장소/공식 문서의 수동 설치 절차를 따라 설치하세요.
+
+설치 후 Codex 계정 등록 (계정마다 반복):
 
 ```bash
-# Option 1: Installer script
-curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/refs/heads/master/cliproxyapi-installer | bash
-
-# Option 2: Build from source (requires Go)
-go install github.com/router-for-me/CLIProxyAPI/cmd/server@latest
+cliproxyapi -codex-login
 ```
 
-#### WSL
+> 파일명에 `-plus` 또는 `-pro`를 포함하면 우선순위가 자동 설정됩니다.
+> CLIProxyAPI는 Codex/Kimi 사용할 때만 필요하며, 미설치 상태에서도 GLM-only로 진행할 수 있습니다.
+> 설치 스크립트는 CLIProxyAPI 미설치 시 설치를 제안합니다. macOS는 brew 자동 설치를 시도할 수 있고, Linux/WSL은 자동 실행 없이 수동 설치 안내 후 GLM-only로 계속 진행합니다.
+> 비대화형(non-interactive, `/dev/tty` 없음) 환경에서는 CLIProxyAPI 자동 설치/설정 패치를 기본적으로 건너뜁니다.
 
-Use the same installation methods as Linux.
-
-For WSL environments where `systemd` is not enabled, use the manual/tmux run mode in Step C instead of `systemctl --user`.
-
----
-
-### Step C — Start CLIProxyAPI Service
-
-#### macOS (Homebrew services)
+### 2. CCTeamBridge 설치
 
 ```bash
-brew services start cliproxyapi
+curl -fsSLo ./install.sh https://raw.githubusercontent.com/binee108/CCTeamBridge/main/install.sh
+chmod +x ./install.sh
+# 검토 후 실행
+bash ./install.sh
 ```
 
-#### Linux (systemd user service)
-
-Create systemd user service:
+이미 설치된 경우 강제 재설치:
 
 ```bash
-mkdir -p ~/.config/systemd/user
-
-if command -v cliproxyapi >/dev/null 2>&1; then
-  CLIPROXY_BIN="$(command -v cliproxyapi)"
-elif command -v cli-proxy-api >/dev/null 2>&1; then
-  CLIPROXY_BIN="$(command -v cli-proxy-api)"
-else
-  echo "ERROR: CLIProxyAPI command not found in PATH" >&2
-  exit 1
-fi
-
-cat > ~/.config/systemd/user/cliproxyapi.service <<EOF
-[Unit]
-Description=CLIProxyAPI Service
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=${CLIPROXY_BIN}
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-EOF
-
-# Enable and start
-systemctl --user daemon-reload
-systemctl --user enable cliproxyapi
-systemctl --user start cliproxyapi
+curl -fsSLo ./install.sh https://raw.githubusercontent.com/binee108/CCTeamBridge/main/install.sh
+chmod +x ./install.sh
+# 검토 후 강제 재설치
+bash ./install.sh --force
 ```
 
-#### WSL (manual execution)
+**끝!** 설치 스크립트가 아래를 모두 자동 수행합니다:
 
-WSL does not support systemd by default. Run manually or use tmux:
+- 모델 프로필 생성 (`~/.claude-models/codex.env`, `glm.env`, `kimi.env`)
+- CLIProxyAPI 설정 파일 자동 구성 (`routing: fill-first`, `quota-exceeded: switch-project` 등)
+- Codex 멀티 계정 우선순위 자동 설정 (`-plus` → 100, `-pro` → 0)
+- CLIProxyAPI 설치 제안/설정 (필요 시), 서비스 시작/재시작
+  - 비대화형에서는 CLIProxyAPI 자동 설치/자동 패치를 기본 건너뜀
+- 셸 함수 설치 (`cc`, `ct`, `cdoctor`)
 
-```bash
-# Option 1: Run in foreground (for testing)
-cliproxyapi
-
-# Option 2: Run in background
-nohup cliproxyapi > ~/.cache/cliproxyapi.log 2>&1 &
-
-# Option 3: Run in tmux (recommended for persistence)
-tmux new-session -d -s cliproxyapi cliproxyapi
-```
-
-To check if running:
+셸 재시작 또는:
 
 ```bash
-# Check process
-pgrep -f cliproxyapi && echo "CLIProxyAPI is running" || echo "CLIProxyAPI is NOT running"
-
-# For tmux session
-tmux list-sessions 2>/dev/null | grep cliproxyapi && echo "Found in tmux"
+source ~/.zshrc  # 또는 source ~/.bashrc
 ```
 
 ---
 
-### Step D — Verify Service Status
+## 사용법
+
+### Solo 모드
 
 ```bash
-# Check if service is listening on port 8317
-curl -s http://127.0.0.1:8317/health 2>/dev/null && echo "Service OK" || echo "Service NOT responding"
+cc                    # Anthropic 직접 연결 (--dangerously-skip-permissions 사용)
+cc --model glm        # GLM 모델 사용 (--dangerously-skip-permissions 사용)
+cc --model codex      # Codex 모델 사용 (--dangerously-skip-permissions 사용)
+```
 
-# Alternative: check port
-if command -v lsof >/dev/null 2>&1; then
-  lsof -i :8317
-elif command -v ss >/dev/null 2>&1; then
-  ss -tlnp | grep 8317
-elif command -v netstat >/dev/null 2>&1; then
-  netstat -tlnp 2>/dev/null | grep 8317
-fi
+### Teams 모드
+
+```bash
+ct                          # 전원 Anthropic (--dangerously-skip-permissions 사용)
+ct --teammate codex         # Leader: Anthropic, Teammates: Codex (--dangerously-skip-permissions 사용)
+ct --teammate glm           # Leader: Anthropic, Teammates: GLM (--dangerously-skip-permissions 사용)
+ct --leader codex           # Leader: Codex, Teammates: Anthropic (--dangerously-skip-permissions 사용)
+ct -l codex -t glm          # Leader: Codex, Teammates: GLM (--dangerously-skip-permissions 사용)
+```
+
+### 진단
+
+```bash
+cdoctor                     # 전체 설정 상태 확인
 ```
 
 ---
 
-### Step E — Resolve Executable Name
+## 모델 프로필
+
+프로필 위치: `~/.claude-models/*.env`
+
+| 프로필 | 파일 | 비고 |
+|--------|------|------|
+| Codex | `codex.env` | CLIProxyAPI 필요, 자동 생성됨 |
+| GLM | `glm.env` | API 키 직접 입력 필요 |
+| Kimi | `kimi.env` | CLIProxyAPI 필요, 자동 생성됨 |
+
+### Codex 계정 등록
+
+CLIProxyAPI 설치 후 OAuth 로그인으로 계정을 등록합니다.
+
+**단일 계정:**
 
 ```bash
-if command -v cliproxyapi >/dev/null 2>&1; then
-  CLIPROXY_CMD="cliproxyapi"
-elif command -v cli-proxy-api >/dev/null 2>&1; then
-  CLIPROXY_CMD="cli-proxy-api"
-else
-  echo "ERROR: CLIProxyAPI command not found" >&2
-  echo "Please ensure CLIProxyAPI is installed and in PATH" >&2
-  exit 1
-fi
-
-echo "CLIProxyAPI command: $CLIPROXY_CMD"
+cliproxyapi -codex-login
+# 브라우저에서 로그인 → ~/.cli-proxy-api/codex-<계정ID>.json 생성됨
 ```
 
----
+**멀티 계정:**
 
-### Step F — Register Codex OAuth Accounts
-
-Run once per account (repeat for each account):
+계정마다 반복 실행합니다. 로그인 후 파일명에 플랜 구분자를 포함하도록 변경하세요:
 
 ```bash
-"$CLIPROXY_CMD" -codex-login
+cliproxyapi -codex-login
+# 로그인 완료 후 파일명 변경:
+mv ~/.cli-proxy-api/codex-<계정ID>.json ~/.cli-proxy-api/codex-work-plus.json
+
+cliproxyapi -codex-login
+mv ~/.cli-proxy-api/codex-<계정ID>.json ~/.cli-proxy-api/codex-personal-pro.json
 ```
 
-Verify files were created:
+| 파일명 패턴 | 자동 우선순위 | 동작 |
+|-------------|-------------|------|
+| `codex-*-plus.json` | `priority: 100` | 먼저 사용 |
+| `codex-*-pro.json` | `priority: 0` | Plus 소진 시 fallback |
+
+> 설치 스크립트가 파일명을 감지하여 우선순위를 자동 설정합니다.
+> quota 초과 시 `switch-project: true` 설정에 의해 다음 계정으로 자동 전환됩니다.
+
+### GLM API 키 설정
+
+API 키 발급: https://z.ai/manage-apikey/apikey-list
+
+**단일 키:**
 
 ```bash
-ls -1 ~/.cli-proxy-api/codex-*.json 2>/dev/null || echo "No codex credential files found"
+vim ~/.claude-models/glm.env
 ```
-
-> **Tip:** Name your files with `-plus` or `-pro` suffix for priority routing (e.g., `codex-work-plus.json`, `codex-personal-pro.json`).
-
----
-
-### Step G — Force Codex Hybrid Profile
 
 ```bash
-mkdir -p ~/.claude-models
-
-cat > ~/.claude-models/codex.env <<'EOF'
-# Codex API Profile (CLIProxyAPI required)
-MODEL_AUTH_TOKEN="sk-dummy"
-MODEL_BASE_URL="http://127.0.0.1:8317"
-MODEL_HAIKU="gpt-5.3-codex"
-MODEL_SONNET="gpt-5.3-codex"
-MODEL_OPUS="gpt-5.3-codex"
-EOF
-chmod 600 ~/.claude-models/codex.env
-
-echo "Created: ~/.claude-models/codex.env"
+MODEL_AUTH_TOKEN="your-glm-api-key"
 ```
 
----
+**멀티 키 (round-robin):**
 
-### Step G2 — Configure GLM API Key (Optional)
-
-If you want to use GLM without CLIProxyAPI, create `~/.claude-models/glm.env`:
+여러 키를 쉼표로 구분하면 teammate pane 생성 시마다 자동 순환 배정됩니다:
 
 ```bash
-mkdir -p ~/.claude-models
-
-cat > ~/.claude-models/glm.env <<'EOF'
-# GLM API Profile
-# Optional multi-key for teammate round-robin (comma-separated)
-MODEL_AUTH_TOKENS="YOUR_GLM_API_KEY_1,YOUR_GLM_API_KEY_2,YOUR_GLM_API_KEY_3"
-# Backward-compatible fallback (used if MODEL_AUTH_TOKENS is unset/empty)
-MODEL_AUTH_TOKEN="YOUR_GLM_API_KEY_HERE"
-MODEL_BASE_URL="https://open.bigmodel.cn/api/anthropic"
-MODEL_HAIKU="glm-4.7-flashx"
-MODEL_SONNET="glm-5"
-MODEL_OPUS="glm-5"
-EOF
-chmod 600 ~/.claude-models/glm.env
-
-echo "Created: ~/.claude-models/glm.env"
-echo "Edit the file and add your GLM API key"
+MODEL_AUTH_TOKENS="GLM_KEY_1,GLM_KEY_2,GLM_KEY_3"
 ```
 
-Use GLM profile:
-
-```bash
-cc --model glm
-ct --teammate glm
-```
-
-`ct --teammate glm`은 teammate pane(shell) 시작 시 `MODEL_AUTH_TOKENS`를 우선 사용해 key를 round-robin으로 1개 선택해 pane의 `ANTHROPIC_AUTH_TOKEN`에 설정합니다.
-
+- `MODEL_AUTH_TOKENS` 설정 시 `MODEL_AUTH_TOKEN`보다 우선합니다
+- 각 pane은 생성 시점에 배정된 키를 고정 사용합니다
 - 상태 파일: `~/.claude-models/.hybrid-rr/<model>.idx`
-- `MODEL_AUTH_TOKENS`가 없거나 비어 있으면 `MODEL_AUTH_TOKEN`으로 fallback합니다.
-- 토큰 원문은 로그/출력에 노출하지 마세요.
-- 동시 pane/session 생성 수가 key 수보다 많아도 생성 시점마다 round-robin으로 계속 순환 배정됩니다(키 공유 가능).
+
+### 커스텀 모델 추가
+
+`~/.claude-models/<name>.env` 파일 생성:
+
+```bash
+MODEL_AUTH_TOKEN="your-key"
+MODEL_BASE_URL="https://api.example.com"
+MODEL_HAIKU="model-name"
+MODEL_SONNET="model-name"
+MODEL_OPUS="model-name"
+```
+
+사용: `ct --teammate <name>` 또는 `cc --model <name>`
 
 ---
 
-### Step H — Configure Routing and Rate-Limit Behavior
+## 서비스 관리
 
-First, detect the config path (from Section 3):
-
-```bash
-# If not already set, detect config path
-if [[ -z "$CLIPROXY_CONFIG_PATH" ]]; then
-  echo "ERROR: CLIPROXY_CONFIG_PATH not set. Run platform detection first." >&2
-  exit 1
-fi
-
-if [[ "$CLIPROXY_CONFIG_PATH" == /etc/* ]]; then
-  if [[ -f "$CLIPROXY_CONFIG_PATH" ]] && [[ ! -w "$CLIPROXY_CONFIG_PATH" ]]; then
-    echo "No write permission for existing $CLIPROXY_CONFIG_PATH, falling back to user config path..."
-    CLIPROXY_CONFIG_PATH="$HOME/.config/cliproxyapi/cliproxyapi.conf"
-    export CLIPROXY_CONFIG_PATH
-  elif [[ ! -f "$CLIPROXY_CONFIG_PATH" ]] && [[ ! -w "$(dirname "$CLIPROXY_CONFIG_PATH")" ]]; then
-    echo "No write permission for $CLIPROXY_CONFIG_PATH, falling back to user config path..."
-    CLIPROXY_CONFIG_PATH="$HOME/.config/cliproxyapi/cliproxyapi.conf"
-    export CLIPROXY_CONFIG_PATH
-  fi
-fi
-
-if [[ ! -f "$CLIPROXY_CONFIG_PATH" ]]; then
-  echo "ERROR: Config file not found: $CLIPROXY_CONFIG_PATH" >&2
-  echo "Creating default config..."
-  mkdir -p "$(dirname "$CLIPROXY_CONFIG_PATH")"
-  cat > "$CLIPROXY_CONFIG_PATH" <<'EOF'
-# CLIProxyAPI Configuration
-listen: "127.0.0.1:8317"
-request-retry: 3
-max-retry-interval: 30
-routing:
-  strategy: "fill-first"
-quota-exceeded:
-  switch-project: true
-  switch-preview-model: true
-EOF
-fi
-```
-
-Patch required values:
-
-```bash
-python3 - <<'PY'
-import os
-import re
-from pathlib import Path
-
-config_path = os.environ.get('CLIPROXY_CONFIG_PATH', '/etc/cliproxyapi.conf')
-p = Path(config_path)
-
-if not p.exists():
-    print(f"ERROR: Config file not found: {p}")
-    exit(1)
-
-s = p.read_text()
-
-# Ensure request-retry and max-retry-interval
-if re.search(r'(?m)^\s*request-retry\s*:', s):
-    s = re.sub(r'(?m)^\s*request-retry\s*:\s*.*$', 'request-retry: 3', s)
-else:
-    s += '\nrequest-retry: 3\n'
-
-if re.search(r'(?m)^\s*max-retry-interval\s*:', s):
-    s = re.sub(r'(?m)^\s*max-retry-interval\s*:\s*.*$', 'max-retry-interval: 30', s)
-else:
-    s += 'max-retry-interval: 30\n'
-
-# Ensure quota-exceeded block exists and switch-project is true
-if not re.search(r'(?m)^quota-exceeded\s*:\s*$', s):
-    s += '\nquota-exceeded:\n  switch-project: true\n  switch-preview-model: true\n'
-else:
-    if re.search(r'(?m)^\s*switch-project\s*:', s):
-        s = re.sub(r'(?m)^\s*switch-project\s*:\s*(true|false).*$','  switch-project: true', s)
-    else:
-        s = re.sub(r'(?m)^quota-exceeded\s*:\s*$','quota-exceeded:\n  switch-project: true', s)
-
-# Ensure routing strategy is fill-first
-if not re.search(r'(?m)^routing\s*:\s*$', s):
-    s += '\nrouting:\n  strategy: "fill-first"\n'
-else:
-    if re.search(r'(?m)^\s*strategy\s*:', s):
-        s = re.sub(r'(?m)^\s*strategy\s*:\s*"[^"]*".*$','  strategy: "fill-first"', s)
-    else:
-        s = re.sub(r'(?m)^routing\s*:\s*$','routing:\n  strategy: "fill-first"', s)
-
-p.write_text(s)
-print(f'Patched: {p}')
-PY
-```
+| 플랫폼 | 시작 | 중지 | 재시작 |
+|--------|------|------|--------|
+| macOS | `brew services start cliproxyapi` | `brew services stop cliproxyapi` | `brew services restart cliproxyapi` |
+| Linux | `systemctl --user start cliproxyapi` | `systemctl --user stop cliproxyapi` | `systemctl --user restart cliproxyapi` |
+| WSL | `tmux new-session -d -s cliproxyapi cliproxyapi` | `tmux kill-session -t cliproxyapi` | 중지 후 시작 |
 
 ---
 
-### Step I — Set Multi-Account Priority
-
-Rules:
-- filename contains `-plus` → `priority=100` (used first)
-- filename contains `-pro` → `priority=0` (fallback)
+## 문제 해결
 
 ```bash
-python3 - <<'PY'
-import glob
-import json
-import os
-from pathlib import Path
-
-for f in glob.glob(os.path.expanduser('~/.cli-proxy-api/codex-*.json')):
-    p = Path(f)
-    name = p.name.lower()
-    data = json.loads(p.read_text())
-    attrs = data.get('attributes', {})
-
-    if '-plus' in name:
-        attrs['priority'] = '100'
-    elif '-pro' in name:
-        attrs['priority'] = '0'
-    else:
-        continue
-
-    data['attributes'] = attrs
-    p.write_text(json.dumps(data, separators=(',', ':')))
-    print(f'Updated: {p.name}')
-PY
-```
-
----
-
-### Step J — Restart Service
-
-#### macOS
-
-```bash
-brew services restart cliproxyapi
-sleep 2
-brew services list | grep cliproxyapi
-```
-
-#### Linux (systemd)
-
-```bash
-systemctl --user restart cliproxyapi
-sleep 2
-systemctl --user status cliproxyapi --no-pager
-```
-
-#### WSL
-
-```bash
-# Kill existing process
-pkill -f cliproxyapi 2>/dev/null || true
-
-# Restart in tmux
-tmux kill-session -t cliproxyapi 2>/dev/null || true
-tmux new-session -d -s cliproxyapi cliproxyapi
-
-sleep 2
-tmux list-sessions | grep cliproxyapi
-```
-
----
-
-### Step K — Verification
-
-#### K0 — Hybrid Installer/Uninstaller Static Checks
-
-```bash
-bash -n install.sh
-bash -n uninstall.sh
-```
-
-#### K0.1 — Single-key Backward Compatibility
-
-- Configure only `MODEL_AUTH_TOKEN` in `~/.claude-models/glm.env`.
-- Run `ct --teammate glm` and confirm teammate sessions work exactly as before.
-
-#### K0.2 — Multi-key Round-robin Assignment (Pane-level)
-
-- Configure `MODEL_AUTH_TOKENS` with 3 keys in `~/.claude-models/glm.env`.
-- Start one session (`ct --teammate glm`) and create multiple panes.
-- In each pane, run `echo "$ANTHROPIC_AUTH_TOKEN"` and verify token assignment rotates per pane creation.
-
-#### K0.3 — Pane Token Pinning
-
-- In one running `ct --teammate glm` session, pick a pane and run `echo "$ANTHROPIC_AUTH_TOKEN"`.
-- Execute additional commands in the same pane and confirm the token value remains unchanged for that pane.
-
-#### K0.4 — Concurrency Check
-
-- Launch multiple `ct --teammate glm` commands and/or create panes in short intervals.
-- Verify key selection rotates per pane/shell creation in short-interval concurrent launches (best-effort file updates).
-
-#### K1 — Verify Config Values
-
-```bash
-echo "=== Checking config file: $CLIPROXY_CONFIG_PATH ==="
-
-if [[ -f "$CLIPROXY_CONFIG_PATH" ]]; then
-  echo "--- request-retry ---"
-  grep -n "request-retry" "$CLIPROXY_CONFIG_PATH" || echo "NOT FOUND"
-
-  echo "--- max-retry-interval ---"
-  grep -n "max-retry-interval" "$CLIPROXY_CONFIG_PATH" || echo "NOT FOUND"
-
-  echo "--- quota-exceeded / switch-project ---"
-  grep -n "quota-exceeded\|switch-project" "$CLIPROXY_CONFIG_PATH" || echo "NOT FOUND"
-
-  echo "--- routing / strategy ---"
-  grep -n "routing\|strategy" "$CLIPROXY_CONFIG_PATH" || echo "NOT FOUND"
-else
-  echo "ERROR: Config file not found"
-fi
-```
-
-#### K2 — Verify Priority Assignment
-
-```bash
-echo "=== Priority counts ==="
-
-PLUS_COUNT=$(grep -l '"priority":"100"' ~/.cli-proxy-api/codex-*.json 2>/dev/null | wc -l | tr -d ' ')
-PRO_COUNT=$(grep -l '"priority":"0"' ~/.cli-proxy-api/codex-*.json 2>/dev/null | wc -l | tr -d ' ')
-
-echo "Plus accounts (priority=100): $PLUS_COUNT"
-echo "Pro accounts (priority=0): $PRO_COUNT"
-
-# Show details
-echo ""
-echo "=== Priority assignments ==="
-grep -R --line-number '"priority"' ~/.cli-proxy-api/codex-*.json 2>/dev/null || echo "No priority assignments found"
-```
-
-#### K3 — Verify Codex Env File
-
-```bash
-echo "=== Checking ~/.claude-models/codex.env ==="
-
-if [[ -f ~/.claude-models/codex.env ]]; then
-  cat ~/.claude-models/codex.env
-  echo ""
-  echo "File permissions:"
-  ls -la ~/.claude-models/codex.env
-else
-  echo "ERROR: codex.env not found"
-fi
-```
-
----
-
-### Step L — API Health Tests
-
-#### L1 — Model List Test
-
-```bash
-echo "=== GET /v1/models ==="
-
-RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" http://127.0.0.1:8317/v1/models \
-  -H "Authorization: Bearer sk-dummy" 2>/dev/null)
-
-HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
-BODY=$(echo "$RESPONSE" | sed '/HTTP_CODE:/d')
-
-if [[ "$HTTP_CODE" == "200" ]]; then
-  echo "SUCCESS (HTTP 200)"
-  echo "$BODY" | head -c 500
-else
-  echo "FAILED (HTTP $HTTP_CODE)"
-  echo "$BODY"
-fi
-```
-
-#### L2 — Completion Test
-
-```bash
-echo "=== POST /v1/chat/completions ==="
-
-RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" http://127.0.0.1:8317/v1/chat/completions \
-  -H "Authorization: Bearer sk-dummy" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model":"gpt-5.3-codex",
-    "messages":[{"role":"user","content":"ping"}],
-    "max_tokens":24
-  }' 2>/dev/null)
-
-HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
-BODY=$(echo "$RESPONSE" | sed '/HTTP_CODE:/d')
-
-if [[ "$HTTP_CODE" == "200" ]]; then
-  echo "SUCCESS (HTTP 200)"
-  echo "$BODY"
-else
-  echo "FAILED (HTTP $HTTP_CODE)"
-  echo "$BODY"
-fi
-```
-
----
-
-### Step M — Launch Test
-
-```bash
-echo "=== Testing ct --teammate codex ==="
-
-# Verify command exists
-if ! command -v ct >/dev/null 2>&1; then
-  echo "ERROR: ct command not found. Did you run install.sh?"
-  exit 1
-fi
-
-# Show version/help to verify it works
-ct --help 2>&1 | head -20 || echo "Command failed"
-
-echo ""
-echo "To start a session, run:"
-echo "  ct --teammate codex"
-```
-
----
-
-## 5) Operational Notes (Important)
-
-| Setting | Value | Purpose |
-|---------|-------|---------|
-| `round-robin` | distributes requests | across matching credentials |
-| `fill-first` | consume one credential first | then move to next |
-| `priority=100` | for plus accounts | used first |
-| `priority=0` | for pro accounts | fallback when plus exhausted |
-| `switch-project: true` | auto-switch on quota | key for account switching |
-
-For mixed plans (plus + pro), use `fill-first` + priority for deterministic plus-first behavior.
-
----
-
-## 6) Commands Provided by This Project
-
-| Command | Description |
-|---------|-------------|
-| `cc` | Claude Code solo (Anthropic direct) |
-| `cc --model <name>` | Claude Code solo with profile model |
-| `ct` | Teams mode (all Anthropic) |
-| `ct --leader <name>` | Teams (leader: profile model, teammates: Anthropic) |
-| `ct --teammate <name>` | Teams (leader: Anthropic, teammates: profile model) |
-| `ct -l <name> -t <name>` | Teams (leader and teammates each use different models) |
-| `ct -w` / `ct --worktree [name]` | Start Teams in a new Claude worktree (optional name) |
-
-Profiles are stored at `~/.claude-models/*.env`.
-
----
-
-## 7) Platform-Specific Service Management
-
-### macOS (Homebrew)
-
-```bash
-# Start service
-brew services start cliproxyapi
-
-# Stop service
-brew services stop cliproxyapi
-
-# Restart service
-brew services restart cliproxyapi
-
-# Check status
-brew services list | grep cliproxyapi
-
-# View logs
-tail -f /opt/homebrew/var/log/cliproxyapi.log 2>/dev/null || \
-  tail -f /usr/local/var/log/cliproxyapi.log 2>/dev/null
-```
-
-### Linux (systemd user)
-
-```bash
-# Start service
-systemctl --user start cliproxyapi
-
-# Stop service
-systemctl --user stop cliproxyapi
-
-# Restart service
-systemctl --user restart cliproxyapi
-
-# Check status
-systemctl --user status cliproxyapi --no-pager
-
-# View logs
-journalctl --user -u cliproxyapi -f
-
-# Enable at login
-systemctl --user enable cliproxyapi
-
-# Disable at login
-systemctl --user disable cliproxyapi
-```
-
-### WSL (manual/tmux)
-
-```bash
-# Start in tmux
-tmux new-session -d -s cliproxyapi cliproxyapi
-
-# Check status
-tmux list-sessions | grep cliproxyapi
-pgrep -f cliproxyapi
-
-# Stop
-tmux kill-session -t cliproxyapi 2>/dev/null || pkill -f cliproxyapi
-
-# View logs (if logging to file)
-tail -f ~/.cache/cliproxyapi.log
-
-# Attach to tmux session
-tmux attach -t cliproxyapi
-```
-
----
-
-## 8) Troubleshooting
-
-### Service not starting
-
-```bash
-# Check if port is already in use
-lsof -i :8317 2>/dev/null || ss -tlnp | grep 8317
-
-# Check process
-pgrep -af cliproxyapi
-
-# Check config syntax
-cliproxyapi -validate-config 2>/dev/null || echo "Config validation not supported"
-```
-
-### API returning errors
-
-```bash
-# Check service health
-curl -v http://127.0.0.1:8317/health
-
-# Check credentials exist
-ls -la ~/.cli-proxy-api/
-
-# Test with verbose output
-curl -v http://127.0.0.1:8317/v1/models \
-  -H "Authorization: Bearer sk-dummy"
-```
-
-### Commands not found
-
-```bash
-# Check PATH
-echo $PATH
-
-# Check installation
-which cc ct cliproxyapi
-
-# Reload shell config
-source ~/.zshrc 2>/dev/null || source ~/.bashrc
-```
-
----
-
-## 9) Final Machine-Readable Report Format
-
-When an AI agent finishes setup, output exactly this structure:
-
-```text
-[SETUP RESULT]
-Platform: macos/linux/wsl
-- install.sh: OK/FAIL
-- CLIProxyAPI service: OK/FAIL
-- codex.env updated: OK/FAIL
-- routing.strategy=fill-first: OK/FAIL
-- switch-project=true: OK/FAIL
-- plus priority count: N
-- pro priority count: N
-- /v1/models test: OK/FAIL
-- /v1/chat/completions test: OK/FAIL
-
-[NOTES]
-- blocking issues (if any)
-- manual actions required (if any)
+cdoctor                                          # 전체 진단
+curl -s http://127.0.0.1:8317/v1/models \
+  -H "Authorization: Bearer sk-dummy"            # API 테스트
+pgrep -f cliproxyapi                             # 프로세스 확인
 ```
 
 ---

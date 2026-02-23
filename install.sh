@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # CCTeamBridge Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/binee108/CCTeamBridge/main/install.sh | bash
+# Usage: curl -fsSLo ./install.sh https://raw.githubusercontent.com/binee108/CCTeamBridge/main/install.sh && chmod +x ./install.sh && bash ./install.sh
 
 VERSION="1.6.0"
 
@@ -17,6 +17,31 @@ info()  { echo -e "${CYAN}[INFO]${RESET} $1"; }
 ok()    { echo -e "${GREEN}[OK]${RESET} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${RESET} $1"; }
 error() { echo -e "${RED}[ERROR]${RESET} $1"; }
+
+_has_tty_prompt() {
+    [[ -r /dev/tty ]]
+}
+
+_read_tty_var() {
+    local _var_name="$1"
+    local _line=""
+    _has_tty_prompt || return 1
+    IFS= read -r _line < /dev/tty || return 1
+    printf -v "$_var_name" '%s' "$_line"
+}
+
+_read_tty_prompt_default() {
+    local _var_name="$1"
+    local _default="${2:-}"
+    local _label="${3:-prompt}"
+    local _non_tty_default="${4:-$_default}"
+    if _read_tty_var "$_var_name"; then
+        return 0
+    fi
+    printf -v "$_var_name" '%s' "$_non_tty_default"
+    warn "No interactive TTY for ${_label}; using default response"
+    return 1
+}
 
 MODELS_DIR="$HOME/.claude-models"
 MARKER_START="# === CLAUDE HYBRID START ==="
@@ -95,7 +120,7 @@ if [[ -n "$INSTALLED_VERSION" ]]; then
     if [[ "$INSTALLED_VERSION" == "$VERSION" ]]; then
         ok "Already installed (v${INSTALLED_VERSION}) - same version"
         echo ""
-        echo -e "  To force reinstall: ${BOLD}curl -fsSL ... | bash -s -- --force${RESET}"
+        echo -e "  To force reinstall: ${BOLD}bash ./install.sh --force${RESET}"
         echo ""
         if [[ -z "$ARG_FORCE" ]]; then
             exit 0
@@ -106,7 +131,7 @@ if [[ -n "$INSTALLED_VERSION" ]]; then
     else
         warn "Installed version (v${INSTALLED_VERSION}) is newer than installer (v${VERSION})"
         echo ""
-        echo -e "  To force downgrade: ${BOLD}curl -fsSL ... | bash -s -- --force${RESET}"
+        echo -e "  To force downgrade: ${BOLD}bash ./install.sh --force${RESET}"
         echo ""
         if [[ -z "$ARG_FORCE" ]]; then
             exit 0
@@ -136,6 +161,7 @@ fi
 # Remove hook entries from tmux.conf
 if [[ -f "$HOME/.tmux.conf" ]] && grep -q 'tmux-hybrid-hook' "$HOME/.tmux.conf" 2>/dev/null; then
     sed -i.bak '/HYBRID MODEL HOOK/d; /tmux-hybrid-hook/d' "$HOME/.tmux.conf"
+    rm -f "$HOME/.tmux.conf.bak"
     _legacy_cleaned=$((_legacy_cleaned + 1))
 fi
 
@@ -144,10 +170,12 @@ for RC in "$HOME/.zshrc" "$HOME/.bashrc"; do
     if [[ -f "$RC" ]]; then
         if grep -q '# === LLM PROVIDER SWITCHER START ===' "$RC" 2>/dev/null; then
             sed -i.bak '/# === LLM PROVIDER SWITCHER START ===/,/# === LLM PROVIDER SWITCHER END ===/d' "$RC"
+            rm -f "${RC}.bak"
             _legacy_cleaned=$((_legacy_cleaned + 1))
         fi
         if grep -q '# === CLAUDE CODE SHORTCUTS ===' "$RC" 2>/dev/null; then
             sed -i.bak '/# === CLAUDE CODE SHORTCUTS ===/,/# === CLAUDE CODE SHORTCUTS END ===/d' "$RC"
+            rm -f "${RC}.bak"
             _legacy_cleaned=$((_legacy_cleaned + 1))
         fi
     fi
@@ -229,73 +257,77 @@ else
     exit 1
 fi
 
-# CLIProxyAPI (optional, needed for codex/kimi) - check command names and common install paths
-CLIPROXY_BIN=""
-for p in \
-    "$(command -v cliproxyapi 2>/dev/null)" \
-    "$(command -v cli-proxy-api 2>/dev/null)" \
-    /usr/local/bin/cliproxyapi \
-    /usr/local/bin/cli-proxy-api \
-    /opt/homebrew/bin/cliproxyapi \
-    /opt/homebrew/bin/cli-proxy-api \
-    /usr/bin/cliproxyapi \
-    /usr/bin/cli-proxy-api \
-    /snap/bin/cliproxyapi \
-    /snap/bin/cli-proxy-api \
-    "$HOME/.local/bin/cliproxyapi" \
-    "$HOME/.local/bin/cli-proxy-api" \
-    "$HOME/bin/cliproxyapi" \
-    "$HOME/bin/cli-proxy-api" \
-    "$HOME/go/bin/cliproxyapi" \
-    "$HOME/go/bin/cli-proxy-api"; do
-    [[ -n "$p" && -x "$p" ]] && CLIPROXY_BIN="$p" && break
-done
+# CLIProxyAPI detection function (reusable after install)
+_detect_cliproxy() {
+    for p in \
+        "$(command -v cliproxyapi 2>/dev/null)" \
+        "$(command -v cli-proxy-api 2>/dev/null)" \
+        /usr/local/bin/cliproxyapi \
+        /usr/local/bin/cli-proxy-api \
+        /opt/homebrew/bin/cliproxyapi \
+        /opt/homebrew/bin/cli-proxy-api \
+        /usr/bin/cliproxyapi \
+        /usr/bin/cli-proxy-api \
+        /snap/bin/cliproxyapi \
+        /snap/bin/cli-proxy-api \
+        "$HOME/.local/bin/cliproxyapi" \
+        "$HOME/.local/bin/cli-proxy-api" \
+        "$HOME/bin/cliproxyapi" \
+        "$HOME/bin/cli-proxy-api" \
+        "$HOME/go/bin/cliproxyapi" \
+        "$HOME/go/bin/cli-proxy-api"; do
+        [[ -n "$p" && -x "$p" ]] && echo "$p" && return 0
+    done
+    return 1
+}
+
+CLIPROXY_BIN="$(_detect_cliproxy)" || CLIPROXY_BIN=""
 
 if [[ -n "$CLIPROXY_BIN" ]]; then
     ok "CLIProxyAPI found ($CLIPROXY_BIN)"
 else
-    warn "CLIProxyAPI not found (optional)"
-    echo ""
-    echo "  CLIProxyAPI is required for Codex and Kimi models."
-    echo "  If you only use GLM or other direct-API models, you can skip this."
-    echo ""
-    echo "  Install using one of these methods:"
+    warn "CLIProxyAPI not found"
     echo ""
     case "$(uname -s)" in
-        Darwin)
-            echo "  Homebrew:       brew install cliproxyapi"
-            echo "  Go:             go install github.com/router-for-me/CLIProxyAPI/cmd/server@latest"
-            echo "  Docker:         docker run --rm -p 8317:8317 cliproxyapi/cliproxyapi"
-            echo "  Binary:         https://github.com/router-for-me/CLIProxyAPI/releases"
-            ;;
-        Linux)
-            echo "  One-liner:      curl -fsSL https://raw.githubusercontent.com/brokechubb/cliproxyapi-installer/refs/heads/master/cliproxyapi-installer | bash"
-            echo "  Arch (AUR):     yay -S cli-proxy-api-bin"
-            echo "  Go:             go install github.com/router-for-me/CLIProxyAPI/cmd/server@latest"
-            echo "  Docker:         docker run --rm -p 8317:8317 cliproxyapi/cliproxyapi"
-            echo "  Binary:         https://github.com/router-for-me/CLIProxyAPI/releases"
-            if [[ -r /proc/version ]] && grep -qiE '(microsoft|wsl)' /proc/version; then
-                echo ""
-                echo "  ${YELLOW}WSL Note:${RESET} systemd may not be enabled by default."
-                echo "    - Check:      systemctl --user status 2>/dev/null"
-                echo "    - If failed:  run 'cliproxyapi' or 'cli-proxy-api' directly in a terminal"
-                echo "    - To enable:  add to /etc/wsl.conf -> [boot] -> systemd=true"
-            fi
+        Darwin*)
+            echo "  실행할 명령어: brew install cliproxyapi"
             ;;
         *)
-            echo "  Download:       https://github.com/router-for-me/CLIProxyAPI/releases"
+            echo "  Linux/WSL에서는 외부 설치 스크립트를 자동 실행하지 않습니다."
+            echo "  CLIProxyAPI 공식 저장소/공식 문서의 수동 설치 절차를 따라 설치하세요."
             ;;
     esac
     echo ""
-    echo "  After install:"
-    echo "    cliproxyapi -codex-login             # Preferred login command"
-    echo "    cli-proxy-api --codex-login          # Alternate command name"
-    echo ""
-    echo "  Start the proxy:"
-    echo "    macOS:      brew services start cliproxyapi"
-    echo "    Linux:      systemctl --user start cliproxyapi"
-    echo "    WSL/Manual: cliproxyapi  # (when systemd is unavailable)"
-    echo ""
+    echo -ne "  ${BOLD}CLIProxyAPI를 지금 설치하시겠습니까? [Y/n]:${RESET} "
+    _read_tty_prompt_default _confirm "Y" "CLIProxyAPI install prompt" "N" >/dev/null || true
+    if [[ -z "$_confirm" || "$_confirm" =~ ^[Yy] ]]; then
+        echo ""
+        case "$(uname -s)" in
+            Darwin*)
+                info "CLIProxyAPI 설치 중 (brew)..."
+                if command -v brew &>/dev/null && brew install cliproxyapi; then
+                    ok "brew로 CLIProxyAPI 설치 완료"
+                else
+                    warn "brew 설치가 실패했습니다. GLM-only 설치를 계속 진행합니다."
+                fi
+                ;;
+            *)
+                info "Linux/WSL에서는 CLIProxyAPI 자동 설치를 실행하지 않습니다."
+                info "CLIProxyAPI 공식 저장소/공식 문서의 수동 설치 절차를 완료한 뒤 다시 실행할 수 있습니다."
+                info "지금은 GLM-only 설치를 계속 진행합니다."
+                ;;
+        esac
+        echo ""
+        # Re-detect after install
+        CLIPROXY_BIN="$(_detect_cliproxy)" || CLIPROXY_BIN=""
+        if [[ -n "$CLIPROXY_BIN" ]]; then
+            ok "CLIProxyAPI 설치 완료 ($CLIPROXY_BIN)"
+        else
+            warn "CLIProxyAPI 설치에 실패했습니다. GLM-only 사용은 계속 가능합니다."
+        fi
+    else
+        info "CLIProxyAPI 설치를 건너뜁니다. GLM-only 설치를 계속 진행합니다."
+    fi
 fi
 
 # ─── Step 1: Model profiles directory ───
@@ -305,19 +337,107 @@ mkdir -p "$MODELS_DIR" && chmod 700 "$MODELS_DIR"
 if [[ ! -f "$MODELS_DIR/glm.env" ]]; then
     cat > "$MODELS_DIR/glm.env" << 'EOF'
 # GLM API Profile
-# Get your API key at: https://open.bigmodel.cn/
-# Optional multi-key for teammate round-robin (comma-separated)
-# MODEL_AUTH_TOKENS="GLM_KEY_1,GLM_KEY_2,GLM_KEY_3"
+# Get your API key at: https://z.ai/manage-apikey/apikey-list
 MODEL_AUTH_TOKEN="YOUR_GLM_API_KEY_HERE"
 MODEL_BASE_URL="https://open.bigmodel.cn/api/anthropic"
-MODEL_HAIKU="glm-4.7-flashx"
+MODEL_HAIKU="glm-4.7"
 MODEL_SONNET="glm-5"
 MODEL_OPUS="glm-5"
 EOF
     chmod 600 "$MODELS_DIR/glm.env"
-    ok "Created glm.env (edit API key before use)"
+    ok "Created glm.env"
+fi
+
+# GLM API key registration
+_glm_needs_key=0
+if grep -q 'YOUR_GLM_API_KEY_HERE' "$MODELS_DIR/glm.env" 2>/dev/null; then
+    _glm_needs_key=1
+fi
+
+if [[ "$_glm_needs_key" -eq 1 ]]; then
+    echo ""
+    info "GLM API 키가 설정되지 않았습니다."
+    echo "  API 키 발급: https://z.ai/manage-apikey/apikey-list"
+    echo ""
+    echo "  API 키 1개당 동시 세션 3개가 할당됩니다."
+    echo "  복수 키 등록 시 동시 세션 수가 비례하여 증가합니다. (키 5개 = 세션 15개)"
+    echo ""
+    echo "  ${CYAN}권장 등록 수:${RESET}"
+    echo "    Lite/Pro 플랜:  1개"
+    echo "    Max 플랜:       5개 (동시 세션 15개로 팀 작업에 최적)"
+    echo ""
+    echo -ne "  ${BOLD}지금 GLM API 키를 등록하시겠습니까? [Y/n]:${RESET} "
+    _read_tty_prompt_default _confirm "N" "GLM key registration prompt" >/dev/null || true
+    if [[ -z "$_confirm" || "$_confirm" =~ ^[Yy] ]]; then
+        _glm_keys=()
+        while true; do
+            echo ""
+            echo -ne "  ${BOLD}GLM API 키를 입력하세요:${RESET} "
+            if ! _read_tty_var _key; then
+                warn "No interactive TTY for GLM key input; stopping key registration loop"
+                break
+            fi
+            _key="${_key#"${_key%%[![:space:]]*}"}"
+            _key="${_key%"${_key##*[![:space:]]}"}"
+            if [[ -z "$_key" ]]; then
+                warn "빈 값은 무시됩니다."
+                continue
+            fi
+            if [[ "$_key" == *'"'* ]] || [[ "$_key" == *$'\n'* ]] || [[ "$_key" == *'`'* ]]; then
+                warn "키에 허용되지 않는 문자가 포함되어 있습니다. 다시 입력하세요."
+                continue
+            fi
+            if [[ ${#_key} -lt 8 ]]; then
+                warn "키가 너무 짧습니다 (${#_key}자). 올바른 키인지 확인하세요."
+                continue
+            fi
+            _glm_keys+=("$_key")
+            ok "키 ${#_glm_keys[@]}개 등록됨"
+            echo ""
+            echo -ne "  ${BOLD}추가 키를 등록하시겠습니까? [y/N]:${RESET} "
+            _read_tty_prompt_default _more "N" "GLM additional key prompt" >/dev/null || true
+            if [[ "$_more" =~ ^[Yy] ]]; then
+                continue
+            else
+                break
+            fi
+        done
+
+        if [[ ${#_glm_keys[@]} -gt 0 ]]; then
+            # Rewrite glm.env safely (avoids sed metacharacter issues with API keys)
+            _glm_token_str=""
+            for _k in "${_glm_keys[@]}"; do
+                if [[ -n "$_glm_token_str" ]]; then
+                    _glm_token_str="${_glm_token_str},${_k}"
+                else
+                    _glm_token_str="$_k"
+                fi
+            done
+
+            {
+                echo "# GLM API Profile"
+                echo "# Get your API key at: https://z.ai/manage-apikey/apikey-list"
+                if [[ ${#_glm_keys[@]} -gt 1 ]]; then
+                    echo "MODEL_AUTH_TOKENS=\"${_glm_token_str}\""
+                fi
+                echo "MODEL_AUTH_TOKEN=\"${_glm_keys[0]}\""
+                echo 'MODEL_BASE_URL="https://open.bigmodel.cn/api/anthropic"'
+                echo 'MODEL_HAIKU="glm-4.7"'
+                echo 'MODEL_SONNET="glm-5"'
+                echo 'MODEL_OPUS="glm-5"'
+            } > "$MODELS_DIR/glm.env"
+            chmod 600 "$MODELS_DIR/glm.env"
+
+            ok "GLM API 키 ${#_glm_keys[@]}개 등록 완료"
+            if [[ ${#_glm_keys[@]} -gt 1 ]]; then
+                info "멀티 키 round-robin: teammate pane마다 자동 순환 배정됩니다"
+            fi
+        fi
+    else
+        info "GLM 키 등록을 건너뛰었습니다 (나중에 편집: vim $MODELS_DIR/glm.env)"
+    fi
 else
-    ok "glm.env already exists, skipping"
+    ok "glm.env already configured"
 fi
 
 if [[ ! -f "$MODELS_DIR/codex.env" ]]; then
@@ -351,6 +471,344 @@ else
     ok "kimi.env already exists, skipping"
 fi
 
+# ─── Step: Codex Account Registration ───
+if [[ -n "$CLIPROXY_BIN" ]]; then
+    _codex_cred_count=0
+    for _f in "$HOME/.cli-proxy-api/codex-"*.json; do
+        [[ -f "$_f" ]] && _codex_cred_count=$((_codex_cred_count + 1))
+    done
+
+    if [[ "$_codex_cred_count" -eq 0 ]]; then
+        echo ""
+        info "Codex 계정이 등록되지 않았습니다."
+        echo "  OAuth 로그인으로 계정을 등록합니다. (브라우저가 열립니다)"
+        echo ""
+        echo -e "  ${YELLOW}Tip:${RESET} 파일명에 -plus 또는 -pro를 포함하면 우선순위가 자동 설정됩니다."
+        echo "    예: codex-work-plus, codex-personal-pro"
+        echo ""
+        echo -ne "  ${BOLD}지금 Codex 계정을 등록하시겠습니까? [Y/n]:${RESET} "
+        _read_tty_prompt_default _confirm "N" "Codex registration prompt" >/dev/null || true
+        if [[ -z "$_confirm" || "$_confirm" =~ ^[Yy] ]]; then
+            while true; do
+                echo ""
+                info "Codex OAuth 로그인을 시작합니다..."
+                "$CLIPROXY_BIN" -codex-login
+                echo ""
+                echo -ne "  ${BOLD}추가 계정을 등록하시겠습니까? [y/N]:${RESET} "
+                _read_tty_prompt_default _more "N" "Codex additional account prompt" >/dev/null || true
+                if [[ "$_more" =~ ^[Yy] ]]; then
+                    continue
+                else
+                    break
+                fi
+            done
+            _codex_cred_count=0
+            for _f in "$HOME/.cli-proxy-api/codex-"*.json; do
+                [[ -f "$_f" ]] && _codex_cred_count=$((_codex_cred_count + 1))
+            done
+            ok "Codex 계정 ${_codex_cred_count}개 등록됨"
+        else
+            info "Codex 계정 등록을 건너뛰었습니다 (나중에 실행: $CLIPROXY_BIN -codex-login)"
+        fi
+    else
+        ok "Codex 계정 ${_codex_cred_count}개 감지됨"
+    fi
+fi
+
+# ─── Step: CLIProxyAPI Auto-Configuration ───
+if [[ -n "$CLIPROXY_BIN" ]]; then
+    info "Auto-configuring CLIProxyAPI..."
+
+    # Detect config path
+    CLIPROXY_CONF=""
+    case "$(uname -s)" in
+        Darwin*)
+            for _p in /opt/homebrew/etc/cliproxyapi.conf /usr/local/etc/cliproxyapi.conf; do
+                [[ -f "$_p" ]] && CLIPROXY_CONF="$_p" && break
+            done
+            [[ -z "$CLIPROXY_CONF" ]] && CLIPROXY_CONF="/opt/homebrew/etc/cliproxyapi.conf"
+            ;;
+        Linux*)
+            for _p in /etc/cliproxyapi.conf /usr/local/etc/cliproxyapi.conf "$HOME/.config/cliproxyapi/cliproxyapi.conf"; do
+                [[ -f "$_p" ]] && CLIPROXY_CONF="$_p" && break
+            done
+            [[ -z "$CLIPROXY_CONF" ]] && CLIPROXY_CONF="$HOME/.config/cliproxyapi/cliproxyapi.conf"
+            ;;
+        *)
+            CLIPROXY_CONF="$HOME/.config/cliproxyapi/cliproxyapi.conf"
+            ;;
+    esac
+
+    # Fallback to user config if no write permission
+    if [[ -n "$CLIPROXY_CONF" ]]; then
+        _conf_dir="$(dirname "$CLIPROXY_CONF")"
+        if { [[ -f "$CLIPROXY_CONF" ]] && [[ ! -w "$CLIPROXY_CONF" ]]; } || \
+           { [[ ! -f "$CLIPROXY_CONF" ]] && [[ ! -w "$_conf_dir" ]]; }; then
+            CLIPROXY_CONF="$HOME/.config/cliproxyapi/cliproxyapi.conf"
+        fi
+    fi
+
+    # Create or patch config
+    if [[ ! -f "$CLIPROXY_CONF" ]]; then
+        mkdir -p "$(dirname "$CLIPROXY_CONF")"
+        cat > "$CLIPROXY_CONF" <<'CONFEOF'
+# CLIProxyAPI Configuration (auto-generated by CCTeamBridge)
+listen: "127.0.0.1:8317"
+request-retry: 3
+max-retry-interval: 30
+routing:
+  strategy: "fill-first"
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: true
+CONFEOF
+        ok "Created CLIProxyAPI config: $CLIPROXY_CONF"
+    else
+        _conf_content="$(cat "$CLIPROXY_CONF")"
+        _changes=()
+        _change_actions=()
+
+        # Detect needed changes
+        if echo "$_conf_content" | grep -q 'strategy:'; then
+            if ! echo "$_conf_content" | grep -q 'strategy:.*"fill-first"'; then
+                _old=$(echo "$_conf_content" | grep -m1 'strategy:' | sed 's/^[[:space:]]*//')
+                _changes+=("  ${_old}  →  strategy: \"fill-first\"")
+                _change_actions+=("strategy_patch")
+            fi
+        elif echo "$_conf_content" | grep -q 'routing:'; then
+            _changes+=("  routing.strategy: (routing 섹션 내 키 없음)  →  \"fill-first\"")
+            _change_actions+=("strategy_insert_in_routing")
+        else
+            _changes+=("  routing.strategy: (없음)  →  \"fill-first\"")
+            _change_actions+=("strategy_add")
+        fi
+
+        if echo "$_conf_content" | grep -q 'switch-project:'; then
+            if ! echo "$_conf_content" | grep -q 'switch-project:.*true'; then
+                _old=$(echo "$_conf_content" | grep -m1 'switch-project:' | sed 's/^[[:space:]]*//')
+                _changes+=("  ${_old}  →  switch-project: true")
+                _change_actions+=("switch_patch")
+            fi
+        elif echo "$_conf_content" | grep -q 'quota-exceeded:'; then
+            _changes+=("  quota-exceeded.switch-project: (quota-exceeded 섹션 내 키 없음)  →  true")
+            _change_actions+=("switch_insert_in_quota")
+        else
+            _changes+=("  quota-exceeded.switch-project: (없음)  →  true")
+            _change_actions+=("switch_add")
+        fi
+
+        if ! echo "$_conf_content" | grep -q 'request-retry:'; then
+            _changes+=("  request-retry: (없음)  →  3")
+            _change_actions+=("retry_add")
+        fi
+
+        if ! echo "$_conf_content" | grep -q 'max-retry-interval:'; then
+            _changes+=("  max-retry-interval: (없음)  →  30")
+            _change_actions+=("interval_add")
+        fi
+
+        if [[ ${#_changes[@]} -gt 0 ]]; then
+            echo ""
+            info "기존 CLIProxyAPI 설정을 감지했습니다: $CLIPROXY_CONF"
+            echo "  다음 설정을 변경합니다:"
+            for _c in "${_changes[@]}"; do
+                echo -e "    $_c"
+            done
+            echo ""
+            echo -ne "  ${BOLD}적용하시겠습니까? (기존 사용자가 아니면 Enter) [Y/n]:${RESET} "
+            _read_tty_prompt_default _confirm "Y" "CLIProxyAPI config patch prompt" "N" >/dev/null || true
+            if [[ -z "$_confirm" || "$_confirm" =~ ^[Yy] ]]; then
+                _patched=0
+                for _action in "${_change_actions[@]}"; do
+                    case "$_action" in
+                        strategy_patch)
+                            sed -i.bak 's/strategy:.*$/strategy: "fill-first"/' "$CLIPROXY_CONF"
+                            _patched=$((_patched + 1)) ;;
+                        strategy_add)
+                            printf '\nrouting:\n  strategy: "fill-first"\n' >> "$CLIPROXY_CONF"
+                            _patched=$((_patched + 1)) ;;
+                        strategy_insert_in_routing)
+                            awk '
+                                BEGIN { inserted=0 }
+                                {
+                                    print
+                                    if (!inserted && $0 ~ /^[[:space:]]*routing:[[:space:]]*$/) {
+                                        print "  strategy: \"fill-first\""
+                                        inserted=1
+                                    }
+                                }
+                            ' "$CLIPROXY_CONF" > "${CLIPROXY_CONF}.tmp" && mv "${CLIPROXY_CONF}.tmp" "$CLIPROXY_CONF"
+                            _patched=$((_patched + 1)) ;;
+                        switch_patch)
+                            sed -i.bak 's/switch-project:.*$/switch-project: true/' "$CLIPROXY_CONF"
+                            _patched=$((_patched + 1)) ;;
+                        switch_add)
+                            printf '\nquota-exceeded:\n  switch-project: true\n  switch-preview-model: true\n' >> "$CLIPROXY_CONF"
+                            _patched=$((_patched + 1)) ;;
+                        switch_insert_in_quota)
+                            awk '
+                                BEGIN { inserted=0 }
+                                {
+                                    print
+                                    if (!inserted && $0 ~ /^[[:space:]]*quota-exceeded:[[:space:]]*$/) {
+                                        print "  switch-project: true"
+                                        inserted=1
+                                    }
+                                }
+                            ' "$CLIPROXY_CONF" > "${CLIPROXY_CONF}.tmp" && mv "${CLIPROXY_CONF}.tmp" "$CLIPROXY_CONF"
+                            _patched=$((_patched + 1)) ;;
+                        retry_add)
+                            printf 'request-retry: 3\n' >> "$CLIPROXY_CONF"
+                            _patched=$((_patched + 1)) ;;
+                        interval_add)
+                            printf 'max-retry-interval: 30\n' >> "$CLIPROXY_CONF"
+                            _patched=$((_patched + 1)) ;;
+                    esac
+                done
+                rm -f "${CLIPROXY_CONF}.bak"
+                ok "CLIProxyAPI 설정 ${_patched}건 변경 완료: $CLIPROXY_CONF"
+            else
+                warn "CLIProxyAPI 설정 변경을 건너뛰었습니다"
+            fi
+        else
+            ok "CLIProxyAPI config already correct: $CLIPROXY_CONF"
+        fi
+    fi
+
+    # Set multi-account priority on codex credentials
+    _priority_changes=()
+    _priority_files=()
+    _priority_values=()
+    for _cred in "$HOME/.cli-proxy-api/codex-"*.json; do
+        [[ -f "$_cred" ]] || continue
+        _name="$(basename "$_cred" | tr '[:upper:]' '[:lower:]')"
+        _priority=""
+        case "$_name" in
+            *-plus*) _priority="100" ;;
+            *-pro*)  _priority="0" ;;
+            *)       continue ;;
+        esac
+        _priority_files+=("$_cred")
+        _priority_values+=("$_priority")
+        _priority_changes+=("$(basename "$_cred"): priority → ${_priority}")
+    done
+
+    if [[ ${#_priority_changes[@]} -gt 0 ]]; then
+        echo ""
+        info "Codex 계정 우선순위를 설정합니다:"
+        for _c in "${_priority_changes[@]}"; do
+            echo "    $_c"
+        done
+        echo ""
+        echo -ne "  ${BOLD}적용하시겠습니까? (기존 사용자가 아니면 Enter) [Y/n]:${RESET} "
+        _read_tty_prompt_default _confirm "Y" "Codex priority prompt" "N" >/dev/null || true
+        if [[ -z "$_confirm" || "$_confirm" =~ ^[Yy] ]]; then
+            _priority_count=0
+            for _i in "${!_priority_files[@]}"; do
+                _cred="${_priority_files[$_i]}"
+                _priority="${_priority_values[$_i]}"
+                if command -v python3 &>/dev/null; then
+                    python3 -c "
+import json, sys
+p, pri = sys.argv[1], sys.argv[2]
+d = json.loads(open(p).read())
+d.setdefault('attributes', {})['priority'] = pri
+open(p, 'w').write(json.dumps(d, separators=(',', ':')))
+" "$_cred" "$_priority" 2>/dev/null && _priority_count=$((_priority_count + 1))
+                elif command -v jq &>/dev/null; then
+                    _tmp="$(jq --arg p "$_priority" '.attributes.priority = $p' "$_cred")" && \
+                        echo "$_tmp" > "$_cred" && _priority_count=$((_priority_count + 1))
+                fi
+            done
+            ok "Codex 계정 우선순위 ${_priority_count}건 설정 완료"
+        else
+            warn "Codex 계정 우선순위 설정을 건너뛰었습니다"
+        fi
+    fi
+
+    # Start/restart CLIProxyAPI service
+    case "$(uname -s)" in
+        Darwin*)
+            if command -v brew &>/dev/null; then
+                if brew services list 2>/dev/null | grep -Eq '^cliproxyapi[[:space:]]+started'; then
+                    brew services restart cliproxyapi >/dev/null 2>&1
+                    ok "Restarted CLIProxyAPI service (brew)"
+                else
+                    brew services start cliproxyapi >/dev/null 2>&1
+                    ok "Started CLIProxyAPI service (brew)"
+                fi
+            else
+                warn "Homebrew not found — start CLIProxyAPI manually: $CLIPROXY_BIN"
+            fi
+            ;;
+        Linux*)
+            if command -v systemctl &>/dev/null && systemctl --user list-unit-files >/dev/null 2>&1; then
+                # Create systemd service if missing
+                if [[ ! -f "$HOME/.config/systemd/user/cliproxyapi.service" ]]; then
+                    mkdir -p "$HOME/.config/systemd/user"
+                    cat > "$HOME/.config/systemd/user/cliproxyapi.service" <<SVCEOF
+[Unit]
+Description=CLIProxyAPI Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${CLIPROXY_BIN}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+SVCEOF
+                    systemctl --user daemon-reload
+                    ok "Created systemd user service"
+                fi
+                systemctl --user enable cliproxyapi >/dev/null 2>&1
+                if systemctl --user is-active cliproxyapi >/dev/null 2>&1; then
+                    systemctl --user restart cliproxyapi >/dev/null 2>&1
+                    ok "Restarted CLIProxyAPI service (systemd)"
+                else
+                    systemctl --user start cliproxyapi >/dev/null 2>&1
+                    ok "Started CLIProxyAPI service (systemd)"
+                fi
+            else
+                # WSL or no systemd
+                if pgrep -f cliproxyapi >/dev/null 2>&1; then
+                    pkill -f cliproxyapi 2>/dev/null || true
+                    sleep 1
+                fi
+                if [[ -n "$TMUX_BIN" ]]; then
+                    "$TMUX_BIN" kill-session -t cliproxyapi 2>/dev/null || true
+                    "$TMUX_BIN" new-session -d -s cliproxyapi "$CLIPROXY_BIN"
+                    if "$TMUX_BIN" has-session -t cliproxyapi 2>/dev/null; then
+                        ok "Started CLIProxyAPI in tmux session"
+                    else
+                        warn "Failed to start CLIProxyAPI in tmux session"
+                    fi
+                else
+                    mkdir -p "$HOME/.cache"
+                    nohup "$CLIPROXY_BIN" > "$HOME/.cache/cliproxyapi.log" 2>&1 &
+                    sleep 1
+                    if pgrep -f cliproxyapi >/dev/null 2>&1; then
+                        ok "Started CLIProxyAPI in background"
+                    else
+                        warn "CLIProxyAPI background start may have failed (check $HOME/.cache/cliproxyapi.log)"
+                    fi
+                fi
+            fi
+            ;;
+    esac
+
+    # Verify service health
+    sleep 2
+    if curl -s http://127.0.0.1:8317/v1/models -H "Authorization: Bearer sk-dummy" >/dev/null 2>&1; then
+        ok "CLIProxyAPI responding on port 8317"
+    else
+        warn "CLIProxyAPI not responding on port 8317 (may need codex-login first)"
+    fi
+    echo ""
+fi
+
 # ─── Step 2: zshenv (non-interactive shell support) ───
 if [[ "$SHELL_RC" == *".zshrc" ]]; then
     info "Installing teammate env override to ~/.zshenv..."
@@ -360,6 +818,7 @@ if [[ "$SHELL_RC" == *".zshrc" ]]; then
     # Remove existing block if present
     if grep -q "$MARKER_START" "$ZSHENV" 2>/dev/null; then
         sed -i.bak "/$MARKER_START/,/$MARKER_END/d" "$ZSHENV"
+        rm -f "${ZSHENV}.bak"
     fi
 
     cat >> "$ZSHENV" << 'ZSHENVEOF'
@@ -456,6 +915,7 @@ touch "$SHELL_RC"
 # Remove existing block if present (update path)
 if grep -q "$MARKER_START" "$SHELL_RC" 2>/dev/null; then
     sed -i.bak "/$MARKER_START/,/$MARKER_END/d" "$SHELL_RC"
+    rm -f "${SHELL_RC}.bak"
     info "Removed previous version, installing v${VERSION}"
 fi
 
@@ -763,7 +1223,7 @@ cdoctor() {
     if [[ -n "\$cliproxy_bin" ]]; then
         _doctor_ok "CLIProxyAPI binary found: \${cliproxy_bin}"
 
-        if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
+        if [[ "\$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
             if brew services list 2>/dev/null | grep -Eq '^cliproxyapi[[:space:]]+started'; then
                 _doctor_ok "CLIProxyAPI service started (brew services)"
             else
@@ -804,7 +1264,7 @@ function cc() {
     local ARGS=()
     while [[ \$# -gt 0 ]]; do
         case "\$1" in
-            --model|-m) MODEL="\$2"; shift 2 ;;
+            --model|-m) [[ \$# -lt 2 ]] && echo "Error: --model requires a value" && return 1; MODEL="\$2"; shift 2 ;;
             --)
                 ARGS+=("\$@")
                 break
@@ -828,8 +1288,8 @@ ct() {
 
     while [[ \$# -gt 0 ]]; do
         case "\$1" in
-            --leader|-l) LEADER="\$2"; shift 2 ;;
-            --teammate|-t) TEAMMATE="\$2"; shift 2 ;;
+            --leader|-l) [[ \$# -lt 2 ]] && echo "Error: --leader requires a value" && return 1; LEADER="\$2"; shift 2 ;;
+            --teammate|-t) [[ \$# -lt 2 ]] && echo "Error: --teammate requires a value" && return 1; TEAMMATE="\$2"; shift 2 ;;
             --)
                 CLAUDE_ARGS+=("\$@")
                 break
@@ -840,6 +1300,16 @@ ct() {
                 ;;
         esac
     done
+
+    # Validate model profile names early (allowlist)
+    if [[ -n "\$LEADER" && ! "\$LEADER" =~ ^[a-zA-Z0-9_-]+\$ ]]; then
+        echo "Error: Invalid leader model name '\$LEADER' (alphanumeric, dash, underscore only)"
+        return 1
+    fi
+    if [[ -n "\$TEAMMATE" && ! "\$TEAMMATE" =~ ^[a-zA-Z0-9_-]+\$ ]]; then
+        echo "Error: Invalid teammate model name '\$TEAMMATE' (alphanumeric, dash, underscore only)"
+        return 1
+    fi
 
     # Validate model profiles
     if [[ -n "\$LEADER" && ! -f "\$HOME/.claude-models/\${LEADER}.env" ]]; then
@@ -906,8 +1376,10 @@ ct() {
 
     # Launch leader pane
     if [[ -n "\$LEADER" ]]; then
+        local _leader_quoted
+        _leader_quoted="\$(printf '%q' "\$LEADER")"
         tmux send-keys -t "\$SESSION" \\
-            "_claude_load_model \$LEADER && \\
+            "_claude_load_model \${_leader_quoted} && \\
             export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 && \\
             \$CLAUDE_CMD" Enter
     else
