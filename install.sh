@@ -392,8 +392,8 @@ if [[ "$_glm_needs_key" -eq 1 ]]; then
                 warn "빈 값은 무시됩니다."
                 continue
             fi
-            if [[ "$_key" == *'"'* ]] || [[ "$_key" == *$'\n'* ]] || [[ "$_key" == *'`'* ]]; then
-                warn "키에 허용되지 않는 문자가 포함되어 있습니다. 다시 입력하세요."
+            if [[ "$_key" == *'"'* ]] || [[ "$_key" == *"'"* ]] || [[ "$_key" == *'$'* ]] || [[ "$_key" == *'\'* ]] || [[ "$_key" == *$'\n'* ]] || [[ "$_key" == *'`'* ]]; then
+                warn "키에 허용되지 않는 특수문자가 포함되어 있습니다. 다시 입력하세요."
                 continue
             fi
             if [[ ${#_key} -lt 8 ]]; then
@@ -577,14 +577,14 @@ CONFEOF
         _changes=()
         _change_actions=()
 
-        # Detect needed changes
-        if echo "$_conf_content" | grep -q 'strategy:'; then
-            if ! echo "$_conf_content" | grep -q 'strategy:.*"fill-first"'; then
+        # Detect needed changes (use precise patterns to avoid false positives from comments)
+        if echo "$_conf_content" | grep -qE '^[[:space:]]*strategy:[[:space:]]*"'; then
+            if ! echo "$_conf_content" | grep -qE 'strategy:[[:space:]]*"fill-first"'; then
                 _old=$(echo "$_conf_content" | grep -m1 'strategy:' | sed 's/^[[:space:]]*//')
                 _changes+=("  ${_old}  →  strategy: \"fill-first\"")
                 _change_actions+=("strategy_patch")
             fi
-        elif echo "$_conf_content" | grep -q 'routing:'; then
+        elif echo "$_conf_content" | grep -qE '^[[:space:]]*routing:[[:space:]]*$'; then
             _changes+=("  routing.strategy: (routing 섹션 내 키 없음)  →  \"fill-first\"")
             _change_actions+=("strategy_insert_in_routing")
         else
@@ -592,13 +592,13 @@ CONFEOF
             _change_actions+=("strategy_add")
         fi
 
-        if echo "$_conf_content" | grep -q 'switch-project:'; then
-            if ! echo "$_conf_content" | grep -q 'switch-project:.*true'; then
+        if echo "$_conf_content" | grep -qE '^[[:space:]]*switch-project:[[:space:]]*(true|false)'; then
+            if ! echo "$_conf_content" | grep -qE 'switch-project:[[:space:]]*true'; then
                 _old=$(echo "$_conf_content" | grep -m1 'switch-project:' | sed 's/^[[:space:]]*//')
                 _changes+=("  ${_old}  →  switch-project: true")
                 _change_actions+=("switch_patch")
             fi
-        elif echo "$_conf_content" | grep -q 'quota-exceeded:'; then
+        elif echo "$_conf_content" | grep -qE '^[[:space:]]*quota-exceeded:[[:space:]]*$'; then
             _changes+=("  quota-exceeded.switch-project: (quota-exceeded 섹션 내 키 없음)  →  true")
             _change_actions+=("switch_insert_in_quota")
         else
@@ -808,12 +808,22 @@ SVCEOF
             ;;
     esac
 
-    # Verify service health
-    sleep 2
-    if curl -s http://127.0.0.1:8317/v1/models -H "Authorization: Bearer sk-dummy" >/dev/null 2>&1; then
+    # Verify service health with retry
+    local _health_attempts=0
+    local _health_max=10
+    local _health_ok=0
+    while ((_health_attempts < _health_max)); do
+        if curl -s --connect-timeout 1 http://127.0.0.1:8317/v1/models -H "Authorization: Bearer sk-dummy" >/dev/null 2>&1; then
+            _health_ok=1
+            break
+        fi
+        sleep 1
+        _health_attempts=$((_health_attempts + 1))
+    done
+    if ((_health_ok)); then
         ok "CLIProxyAPI responding on port 8317"
     else
-        warn "CLIProxyAPI not responding on port 8317 (may need codex-login first)"
+        warn "CLIProxyAPI not responding on port 8317 after ${_health_max}s (may need codex-login first)"
     fi
     echo ""
 fi
@@ -853,7 +863,27 @@ if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[
         if ((_HYBRID_RR_COUNT > 0)); then
             _HYBRID_RR_DIR="$HOME/.claude-models/.hybrid-rr"
             _HYBRID_RR_IDX_FILE="${_HYBRID_RR_DIR}/${HYBRID_ACTIVE}.idx"
+            _HYBRID_RR_LOCK="${_HYBRID_RR_DIR}/${HYBRID_ACTIVE}.lock"
             _HYBRID_RR_INDEX=0
+
+            mkdir -p "$_HYBRID_RR_DIR"
+
+            # Acquire lock for atomic read-modify-write (flock preferred, mkdir fallback)
+            _HYBRID_RR_LOCK_FD=""
+            _HYBRID_RR_LOCK_MKDIR=0
+            if command -v flock >/dev/null 2>&1 && [[ -n "${BASH_VERSION:-}${ZSH_VERSION:-}" ]]; then
+                exec 201>"$_HYBRID_RR_LOCK" 2>/dev/null && _HYBRID_RR_LOCK_FD=201
+                if [[ -n "$_HYBRID_RR_LOCK_FD" ]]; then
+                    flock -w 3 "$_HYBRID_RR_LOCK_FD" 2>/dev/null || _HYBRID_RR_LOCK_FD=""
+                fi
+            fi
+            if [[ -z "$_HYBRID_RR_LOCK_FD" ]]; then
+                _lock_try=0
+                while ! mkdir "$_HYBRID_RR_LOCK" 2>/dev/null && ((_lock_try < 30)); do
+                    sleep 0.1; _lock_try=$((_lock_try + 1))
+                done
+                ((_lock_try < 30)) && _HYBRID_RR_LOCK_MKDIR=1
+            fi
 
             if [[ -f "$_HYBRID_RR_IDX_FILE" ]]; then
                 read -r _HYBRID_RR_INDEX < "$_HYBRID_RR_IDX_FILE" || _HYBRID_RR_INDEX=0
@@ -883,11 +913,14 @@ if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[
             fi
 
             _HYBRID_RR_NEXT=$(((_HYBRID_RR_INDEX + 1) % _HYBRID_RR_COUNT))
-            mkdir -p "$_HYBRID_RR_DIR"
             printf '%s\n' "$_HYBRID_RR_NEXT" > "$_HYBRID_RR_IDX_FILE" 2>/dev/null || true
+
+            # Release lock
+            [[ -n "$_HYBRID_RR_LOCK_FD" ]] && flock -u "$_HYBRID_RR_LOCK_FD" 2>/dev/null
+            ((_HYBRID_RR_LOCK_MKDIR)) && rmdir "$_HYBRID_RR_LOCK" 2>/dev/null
         fi
 
-        unset _HYBRID_TOKEN_CANDIDATES _HYBRID_TOKEN_ITEM _HYBRID_RR_COUNT _HYBRID_RR_DIR _HYBRID_RR_IDX_FILE _HYBRID_RR_INDEX _HYBRID_RR_POS _HYBRID_RR_SELECTED _HYBRID_RR_NEXT
+        unset _HYBRID_TOKEN_CANDIDATES _HYBRID_TOKEN_ITEM _HYBRID_RR_COUNT _HYBRID_RR_DIR _HYBRID_RR_IDX_FILE _HYBRID_RR_LOCK _HYBRID_RR_INDEX _HYBRID_RR_POS _HYBRID_RR_SELECTED _HYBRID_RR_NEXT _HYBRID_RR_LOCK_FD _HYBRID_RR_LOCK_MKDIR
     fi
     export ANTHROPIC_BASE_URL="$MODEL_BASE_URL"
     export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL_HAIKU"
@@ -961,7 +994,27 @@ if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[
         if ((_HYBRID_RR_COUNT > 0)); then
             _HYBRID_RR_DIR="$HOME/.claude-models/.hybrid-rr"
             _HYBRID_RR_IDX_FILE="${_HYBRID_RR_DIR}/${HYBRID_ACTIVE}.idx"
+            _HYBRID_RR_LOCK="${_HYBRID_RR_DIR}/${HYBRID_ACTIVE}.lock"
             _HYBRID_RR_INDEX=0
+
+            mkdir -p "$_HYBRID_RR_DIR"
+
+            # Acquire lock for atomic read-modify-write (flock preferred, mkdir fallback)
+            _HYBRID_RR_LOCK_FD=""
+            _HYBRID_RR_LOCK_MKDIR=0
+            if command -v flock >/dev/null 2>&1 && [[ -n "${BASH_VERSION:-}${ZSH_VERSION:-}" ]]; then
+                exec 201>"$_HYBRID_RR_LOCK" 2>/dev/null && _HYBRID_RR_LOCK_FD=201
+                if [[ -n "$_HYBRID_RR_LOCK_FD" ]]; then
+                    flock -w 3 "$_HYBRID_RR_LOCK_FD" 2>/dev/null || _HYBRID_RR_LOCK_FD=""
+                fi
+            fi
+            if [[ -z "$_HYBRID_RR_LOCK_FD" ]]; then
+                _lock_try=0
+                while ! mkdir "$_HYBRID_RR_LOCK" 2>/dev/null && ((_lock_try < 30)); do
+                    sleep 0.1; _lock_try=$((_lock_try + 1))
+                done
+                ((_lock_try < 30)) && _HYBRID_RR_LOCK_MKDIR=1
+            fi
 
             if [[ -f "$_HYBRID_RR_IDX_FILE" ]]; then
                 read -r _HYBRID_RR_INDEX < "$_HYBRID_RR_IDX_FILE" || _HYBRID_RR_INDEX=0
@@ -991,11 +1044,14 @@ if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[
             fi
 
             _HYBRID_RR_NEXT=$(((_HYBRID_RR_INDEX + 1) % _HYBRID_RR_COUNT))
-            mkdir -p "$_HYBRID_RR_DIR"
             printf '%s\n' "$_HYBRID_RR_NEXT" > "$_HYBRID_RR_IDX_FILE" 2>/dev/null || true
+
+            # Release lock
+            [[ -n "$_HYBRID_RR_LOCK_FD" ]] && flock -u "$_HYBRID_RR_LOCK_FD" 2>/dev/null
+            ((_HYBRID_RR_LOCK_MKDIR)) && rmdir "$_HYBRID_RR_LOCK" 2>/dev/null
         fi
 
-        unset _HYBRID_TOKEN_CANDIDATES _HYBRID_TOKEN_ITEM _HYBRID_RR_COUNT _HYBRID_RR_DIR _HYBRID_RR_IDX_FILE _HYBRID_RR_INDEX _HYBRID_RR_POS _HYBRID_RR_SELECTED _HYBRID_RR_NEXT
+        unset _HYBRID_TOKEN_CANDIDATES _HYBRID_TOKEN_ITEM _HYBRID_RR_COUNT _HYBRID_RR_DIR _HYBRID_RR_IDX_FILE _HYBRID_RR_LOCK _HYBRID_RR_INDEX _HYBRID_RR_POS _HYBRID_RR_SELECTED _HYBRID_RR_NEXT _HYBRID_RR_LOCK_FD _HYBRID_RR_LOCK_MKDIR
     fi
     export ANTHROPIC_BASE_URL="$MODEL_BASE_URL"
     export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL_HAIKU"
