@@ -77,7 +77,7 @@ ccd                    # Claude Code (Anthropic direct)
 ccd --model glm        # Claude Code with GLM
 ccd --model codex      # Claude Code with Codex
 ccd --model kimi       # Claude Code with Kimi
-ccd --model hybrid     # Claude Code with Claude Opus + GLM Sonnet/Haiku
+ccd --model hybrid     # Claude Code with custom multi-model
 ```
 
 > **보안:** `ccd`는 `--dangerously-skip-permissions` 플래그로 실행됩니다. 파일 쓰기, 명령 실행 등 모든 권한 확인을 자동 승인합니다.
@@ -99,7 +99,7 @@ cdoctor                     # 전체 설정 상태 확인
 | GLM | `glm.env` | API 키 직접 입력 필요 |
 | Codex | `codex.env` | CLIProxyAPI 필요, 자동 생성됨 |
 | Kimi | `kimi.env` | CLIProxyAPI 필요, 자동 생성됨 |
-| Hybrid | `hybrid.env` | CLIProxyAPI + Claude OAuth + GLM 필요 |
+| Hybrid | `hybrid.env` | CLIProxyAPI 필요, 자유로운 모델 조합 |
 
 ### Codex 계정 등록
 
@@ -160,43 +160,41 @@ MODEL_AUTH_TOKENS="GLM_KEY_1,GLM_KEY_2,GLM_KEY_3"
 
 ### Hybrid 모델 설정
 
-Hybrid 모델은 Claude Opus와 GLM을 조합하여 사용합니다. CLIProxyAPI를 통해 모델 라우팅이 이루어집니다.
+Hybrid 모델은 CLIProxyAPI를 통해 여러 모델을 자유롭게 조합할 수 있는 프로필입니다. Opus/Sonnet/Haiku 각 역할에 원하는 모델을 설정하세요.
 
-**모델 매핑:**
+**설정 예시:**
 
-| 역할 | 모델 | 백엔드 |
-|------|------|--------|
-| Opus | `claude-opus-4-6` | Claude OAuth |
-| Sonnet | `glm-5.1` | GLM 코딩 플랜 |
-| Haiku | `glm-5-turbo` | GLM 코딩 플랜 |
+`~/.claude-models/hybrid.env`를 편집하여 모델을 조합합니다:
+
+```bash
+MODEL_AUTH_TOKEN="sk-dummy"
+MODEL_BASE_URL="http://127.0.0.1:8317"
+MODEL_HAIKU="glm-5-turbo"       # 빠른 응답용
+MODEL_SONNET="gpt-5.3-codex"    # 일반 작업용
+MODEL_OPUS="claude-opus-4-6"    # 복잡한 추론용
+```
+
+| 역할 | 기본값 | 설정 가능 모델 예시 |
+|------|--------|-------------------|
+| Opus | `claude-opus-4-6` | Claude, GPT, GLM, Kimi 등 |
+| Sonnet | `glm-5.1` | Claude, GPT, GLM, Kimi 등 |
+| Haiku | `glm-5-turbo` | Claude, GPT, GLM, Kimi 등 |
 
 **사전 요구사항:**
 
-1. Claude OAuth 로그인:
+1. CLIProxyAPI 설치 및 실행
+2. 사용하려는 모델의 인증 정보를 CLIProxyAPI에 등록
    ```bash
-   cliproxyapi -claude-login
+   cliproxyapi -claude-login    # Claude OAuth
+   cliproxyapi -codex-login     # Codex OAuth
+   # GLM 등 기타 모델은 cliproxyapi.conf에 API 키 등록
    ```
-2. GLM API 키를 CLIProxyAPI 설정에 등록 (`cliproxyapi.conf`):
-
-```yaml
-openai-compatibility:
-  - name: "zhipu-glm"
-    base-url: "https://api.z.ai/api/coding/paas/v4"
-    api-key-entries:
-      - api-key: "your-glm-api-key"
-    models:
-      - name: "glm-5.1"
-        alias: "glm-5.1"
-      - name: "glm-5-turbo"
-        alias: "glm-5-turbo"
-```
-
 3. CLIProxyAPI 재시작:
    ```bash
    brew services restart cliproxyapi
    ```
 
-> 설치 스크립트가 `hybrid.env`를 자동 생성하지만, Claude OAuth와 GLM API 키 등록은 수동으로 진행해야 합니다.
+> 설치 스크립트가 `hybrid.env`를 자동 생성하지만, 모델 인증 정보 등록은 수동으로 진행해야 합니다.
 
 ### 커스텀 모델 추가
 

@@ -425,10 +425,9 @@ fi
 
 if [[ ! -f "$MODELS_DIR/hybrid.env" ]]; then
     cat > "$MODELS_DIR/hybrid.env" << 'EOF'
-# Hybrid API Profile (Claude + GLM via CLIProxyAPI)
-# Requires: cliproxyapi with Claude OAuth + GLM API keys
-#   cliproxyapi -claude-login          # Claude OAuth
-#   # GLM keys in cliproxyapi.conf     # GLM openai-compatibility
+# Hybrid API Profile (Custom multi-model via CLIProxyAPI)
+# Configure any model combination for Opus/Sonnet/Haiku roles
+# Requires: CLIProxyAPI with appropriate model credentials
 MODEL_AUTH_TOKEN="sk-dummy"
 MODEL_BASE_URL="http://127.0.0.1:8317"
 MODEL_HAIKU="glm-5-turbo"
@@ -436,7 +435,7 @@ MODEL_SONNET="glm-5.1"
 MODEL_OPUS="claude-opus-4-6"
 EOF
     chmod 600 "$MODELS_DIR/hybrid.env"
-    ok "Created hybrid.env (CLIProxyAPI + Claude OAuth + GLM required)"
+    ok "Created hybrid.env (CLIProxyAPI required — configure any model combination)"
 else
     ok "hybrid.env already exists, skipping"
 fi
@@ -1023,7 +1022,7 @@ echo "  ccd                          # Claude Code (Anthropic direct)"
 echo "  ccd --model glm              # Claude Code with GLM"
 echo "  ccd --model codex            # Claude Code with Codex"
 echo "  ccd --model kimi             # Claude Code with Kimi"
-echo "  ccd --model hybrid           # Claude Code with Claude Opus + GLM Sonnet/Haiku"
+echo "  ccd --model hybrid           # Claude Code with custom multi-model"
 echo "  cdoctor                      # 진단 도구"
 echo ""
 echo -e "${BOLD}Configure your API keys:${RESET}"
