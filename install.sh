@@ -746,9 +746,9 @@ SVCEOF
     esac
 
     # Verify service health with retry
-    local _health_attempts=0
-    local _health_max=10
-    local _health_ok=0
+    _health_attempts=0
+    _health_max=10
+    _health_ok=0
     while ((_health_attempts < _health_max)); do
         if curl -s --connect-timeout 1 http://127.0.0.1:8317/v1/models -H "Authorization: Bearer sk-dummy" >/dev/null 2>&1; then
             _health_ok=1
