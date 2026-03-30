@@ -423,6 +423,24 @@ else
     ok "kimi.env already exists, skipping"
 fi
 
+if [[ ! -f "$MODELS_DIR/hybrid.env" ]]; then
+    cat > "$MODELS_DIR/hybrid.env" << 'EOF'
+# Hybrid API Profile (Claude + GLM via CLIProxyAPI)
+# Requires: cliproxyapi with Claude OAuth + GLM API keys
+#   cliproxyapi -claude-login          # Claude OAuth
+#   # GLM keys in cliproxyapi.conf     # GLM openai-compatibility
+MODEL_AUTH_TOKEN="sk-dummy"
+MODEL_BASE_URL="http://127.0.0.1:8317"
+MODEL_HAIKU="glm-5-turbo"
+MODEL_SONNET="glm-5.1"
+MODEL_OPUS="claude-opus-4-6"
+EOF
+    chmod 600 "$MODELS_DIR/hybrid.env"
+    ok "Created hybrid.env (CLIProxyAPI + Claude OAuth + GLM required)"
+else
+    ok "hybrid.env already exists, skipping"
+fi
+
 # ─── Step: Codex Account Registration ───
 if [[ -n "$CLIPROXY_BIN" ]]; then
     _codex_cred_count=0
@@ -868,7 +886,7 @@ cdoctor() {
         _doctor_err "Model profile directory missing: \$HOME/.claude-models"
     fi
 
-    for profile in glm codex kimi; do
+    for profile in glm codex kimi hybrid; do
         if [[ -f "\$HOME/.claude-models/\${profile}.env" ]]; then
             _doctor_ok "Profile exists: \${profile}.env"
         else
@@ -1004,6 +1022,7 @@ echo -e "${BOLD}Usage:${RESET}"
 echo "  ccd                          # Claude Code (Anthropic direct)"
 echo "  ccd --model glm              # Claude Code with GLM"
 echo "  ccd --model codex            # Claude Code with Codex"
+echo "  ccd --model hybrid           # Claude Code with Claude Opus + GLM Sonnet/Haiku"
 echo "  cdoctor                     # Diagnose setup health"
 echo ""
 echo -e "${BOLD}Configure your API keys:${RESET}"
