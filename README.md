@@ -2,6 +2,8 @@
 
 Claude Code를 다양한 모델(GLM, Codex, Kimi 등)과 함께 사용할 수 있게 해주는 모델 스위칭 도구입니다.
 
+> **참고:** `ccd` 명령은 `claude --dangerously-skip-permissions`의 단축어입니다. 모든 권한 프롬프트를 건너뛰고 실행되므로, 신뢰할 수 있는 환경에서만 사용하세요.
+
 macOS, Linux, WSL 모두 지원합니다.
 
 ---
@@ -57,7 +59,7 @@ bash ./install.sh --force
 - Codex 멀티 계정 우선순위 자동 설정 (`-plus` → 100, `-pro` → 0)
 - CLIProxyAPI 설치 제안/설정 (필요 시), 서비스 시작/재시작
   - 비대화형에서는 CLIProxyAPI 자동 설치/자동 패치를 기본 건너뜀
-- 셸 함수 설치 (`cc`, `cdoctor`)
+- 셸 함수 설치 (`ccd`, `cdoctor`)
 
 셸 재시작 또는:
 
@@ -70,11 +72,13 @@ source ~/.zshrc  # 또는 source ~/.bashrc
 ## 사용법
 
 ```bash
-cc                    # Claude Code (Anthropic direct)
-cc --model glm        # Claude Code with GLM
-cc --model codex      # Claude Code with Codex
-cc --model kimi       # Claude Code with Kimi
+ccd                    # Claude Code (Anthropic direct)
+ccd --model glm        # Claude Code with GLM
+ccd --model codex      # Claude Code with Codex
+ccd --model kimi       # Claude Code with Kimi
 ```
+
+> **보안:** `ccd`는 `--dangerously-skip-permissions` 플래그로 실행됩니다. 파일 쓰기, 명령 실행 등 모든 권한 확인을 자동 승인합니다.
 
 ### 진단
 
@@ -163,7 +167,7 @@ MODEL_SONNET="model-name"
 MODEL_OPUS="model-name"
 ```
 
-사용: `cc --model <name>`
+사용: `ccd --model <name>`
 
 ---
 

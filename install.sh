@@ -10,7 +10,7 @@ fi
 # CCTeamBridge Installer
 # Usage: curl -fsSLo ./install.sh https://raw.githubusercontent.com/binee108/CCTeamBridge/main/install.sh && chmod +x ./install.sh && bash ./install.sh
 
-VERSION="1.6.0"
+VERSION="1.7.0"
 
 BOLD="\033[1m"
 GREEN="\033[32m"
@@ -661,11 +661,17 @@ CONFEOF
                 _priority="${_priority_values[$_i]}"
                 if command -v python3 &>/dev/null; then
                     python3 -c "
-import json, sys
+import json, os, sys, tempfile
 p, pri = sys.argv[1], sys.argv[2]
 d = json.loads(open(p).read())
 d.setdefault('attributes', {})['priority'] = pri
-open(p, 'w').write(json.dumps(d, separators=(',', ':')))
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p))
+try:
+    with os.fdopen(fd, 'w') as f: f.write(json.dumps(d, separators=(',', ':')))
+    os.replace(tmp, p)
+    tmp = None
+finally:
+    if tmp: os.unlink(tmp)
 " "$_cred" "$_priority" 2>/dev/null && _priority_count=$((_priority_count + 1))
                 elif command -v jq &>/dev/null; then
                     _tmp="$(jq --arg p "$_priority" '.attributes.priority = $p' "$_cred")" && \
@@ -725,14 +731,12 @@ SVCEOF
                 fi
             else
                 # WSL or no systemd
-                if pgrep -f cliproxyapi >/dev/null 2>&1; then
-                    pkill -f cliproxyapi 2>/dev/null || true
-                    sleep 1
-                fi
+                pkill -xf -- "$CLIPROXY_BIN" 2>/dev/null || true
+                sleep 1
                 mkdir -p "$HOME/.cache"
                 nohup "$CLIPROXY_BIN" > "$HOME/.cache/cliproxyapi.log" 2>&1 &
                 sleep 1
-                if pgrep -f cliproxyapi >/dev/null 2>&1; then
+                if pgrep -xf "$CLIPROXY_BIN" >/dev/null 2>&1; then
                     ok "Started CLIProxyAPI in background"
                 else
                     warn "CLIProxyAPI background start may have failed (check $HOME/.cache/cliproxyapi.log)"
@@ -958,8 +962,8 @@ cdoctor() {
     return 0
 }
 
-# --- cc: Claude Code solo ---
-function cc() {
+# --- ccd: Claude Code dangerously-skip-permissions ---
+function ccd() {
     local MODEL=""
     local ARGS=()
     while [[ \$# -gt 0 ]]; do
@@ -997,9 +1001,9 @@ echo ""
 echo "  Restart your shell or run:  source $SHELL_RC"
 echo ""
 echo -e "${BOLD}Usage:${RESET}"
-echo "  cc                          # Claude Code (Anthropic direct)"
-echo "  cc --model glm              # Claude Code with GLM"
-echo "  cc --model codex            # Claude Code with Codex"
+echo "  ccd                          # Claude Code (Anthropic direct)"
+echo "  ccd --model glm              # Claude Code with GLM"
+echo "  ccd --model codex            # Claude Code with Codex"
 echo "  cdoctor                     # Diagnose setup health"
 echo ""
 echo -e "${BOLD}Configure your API keys:${RESET}"
@@ -1009,5 +1013,5 @@ echo ""
 echo -e "${BOLD}Add a new model:${RESET}"
 echo "  Create ~/.claude-models/<name>.env with:"
 echo "    MODEL_AUTH_TOKEN, MODEL_BASE_URL, MODEL_HAIKU, MODEL_SONNET, MODEL_OPUS"
-echo "  Then use: cc --model <name>"
+echo "  Then use: ccd --model <name>"
 echo ""
