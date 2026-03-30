@@ -1,6 +1,6 @@
 # CCTeamBridge
 
-Claude Code를 다양한 모델(GLM, Codex, Kimi 등)과 함께 사용할 수 있게 해주는 모델 스위칭 도구입니다.
+Claude Code를 다양한 모델(GLM, Codex, Kimi, Hybrid 등)과 함께 사용할 수 있게 해주는 모델 스위칭 도구입니다.
 
 > **참고:** `ccd` 명령은 `claude --dangerously-skip-permissions`의 단축어입니다. 모든 권한 프롬프트를 건너뛰고 실행되므로, 신뢰할 수 있는 환경에서만 사용하세요.
 
@@ -23,10 +23,11 @@ brew install cliproxyapi
 외부 스크립트 원격 실행 명령은 제공하지 않습니다.
 CLIProxyAPI 공식 저장소/공식 문서의 수동 설치 절차를 따라 설치하세요.
 
-설치 후 Codex 계정 등록 (계정마다 반복):
+설치 후 OAuth 계정 등록 (계정마다 반복):
 
 ```bash
-cliproxyapi -codex-login
+cliproxyapi -codex-login    # Codex 계정
+cliproxyapi -claude-login   # Claude 계정 (hybrid 모델에 필요)
 ```
 
 > 파일명에 `-plus` 또는 `-pro`를 포함하면 우선순위가 자동 설정됩니다.
@@ -54,7 +55,7 @@ bash ./install.sh --force
 
 **끝!** 설치 스크립트가 아래를 모두 자동 수행합니다:
 
-- 모델 프로필 생성 (`~/.claude-models/codex.env`, `glm.env`, `kimi.env`)
+- 모델 프로필 생성 (`~/.claude-models/codex.env`, `glm.env`, `kimi.env`, `hybrid.env`)
 - CLIProxyAPI 설정 파일 자동 구성 (`routing: fill-first`, `quota-exceeded: switch-project` 등)
 - Codex 멀티 계정 우선순위 자동 설정 (`-plus` → 100, `-pro` → 0)
 - CLIProxyAPI 설치 제안/설정 (필요 시), 서비스 시작/재시작
@@ -76,6 +77,7 @@ ccd                    # Claude Code (Anthropic direct)
 ccd --model glm        # Claude Code with GLM
 ccd --model codex      # Claude Code with Codex
 ccd --model kimi       # Claude Code with Kimi
+ccd --model hybrid     # Claude Code with Claude Opus + GLM Sonnet/Haiku
 ```
 
 > **보안:** `ccd`는 `--dangerously-skip-permissions` 플래그로 실행됩니다. 파일 쓰기, 명령 실행 등 모든 권한 확인을 자동 승인합니다.
@@ -94,9 +96,10 @@ cdoctor                     # 전체 설정 상태 확인
 
 | 프로필 | 파일 | 비고 |
 |--------|------|------|
-| Codex | `codex.env` | CLIProxyAPI 필요, 자동 생성됨 |
 | GLM | `glm.env` | API 키 직접 입력 필요 |
+| Codex | `codex.env` | CLIProxyAPI 필요, 자동 생성됨 |
 | Kimi | `kimi.env` | CLIProxyAPI 필요, 자동 생성됨 |
+| Hybrid | `hybrid.env` | CLIProxyAPI + Claude OAuth + GLM 필요 |
 
 ### Codex 계정 등록
 
@@ -154,6 +157,46 @@ MODEL_AUTH_TOKENS="GLM_KEY_1,GLM_KEY_2,GLM_KEY_3"
 
 - `MODEL_AUTH_TOKENS` 설정 시 `MODEL_AUTH_TOKEN`보다 우선합니다
 - 첫 번째 키가 사용됩니다
+
+### Hybrid 모델 설정
+
+Hybrid 모델은 Claude Opus와 GLM을 조합하여 사용합니다. CLIProxyAPI를 통해 모델 라우팅이 이루어집니다.
+
+**모델 매핑:**
+
+| 역할 | 모델 | 백엔드 |
+|------|------|--------|
+| Opus | `claude-opus-4-6` | Claude OAuth |
+| Sonnet | `glm-5.1` | GLM 코딩 플랜 |
+| Haiku | `glm-5-turbo` | GLM 코딩 플랜 |
+
+**사전 요구사항:**
+
+1. Claude OAuth 로그인:
+   ```bash
+   cliproxyapi -claude-login
+   ```
+2. GLM API 키를 CLIProxyAPI 설정에 등록 (`cliproxyapi.conf`):
+
+```yaml
+openai-compatibility:
+  - name: "zhipu-glm"
+    base-url: "https://api.z.ai/api/coding/paas/v4"
+    api-key-entries:
+      - api-key: "your-glm-api-key"
+    models:
+      - name: "glm-5.1"
+        alias: "glm-5.1"
+      - name: "glm-5-turbo"
+        alias: "glm-5-turbo"
+```
+
+3. CLIProxyAPI 재시작:
+   ```bash
+   brew services restart cliproxyapi
+   ```
+
+> 설치 스크립트가 `hybrid.env`를 자동 생성하지만, Claude OAuth와 GLM API 키 등록은 수동으로 진행해야 합니다.
 
 ### 커스텀 모델 추가
 
