@@ -1,6 +1,6 @@
 # CCTeamBridge
 
-Leader는 Anthropic 직접 연결, Teammate는 원하는 모델 프로필(Codex, GLM, Kimi 등)을 사용합니다.
+Claude Code를 다양한 모델(GLM, Codex, Kimi 등)과 함께 사용할 수 있게 해주는 모델 스위칭 도구입니다.
 
 macOS, Linux, WSL 모두 지원합니다.
 
@@ -57,7 +57,7 @@ bash ./install.sh --force
 - Codex 멀티 계정 우선순위 자동 설정 (`-plus` → 100, `-pro` → 0)
 - CLIProxyAPI 설치 제안/설정 (필요 시), 서비스 시작/재시작
   - 비대화형에서는 CLIProxyAPI 자동 설치/자동 패치를 기본 건너뜀
-- 셸 함수 설치 (`cc`, `ct`, `cdoctor`)
+- 셸 함수 설치 (`cc`, `cdoctor`)
 
 셸 재시작 또는:
 
@@ -69,22 +69,11 @@ source ~/.zshrc  # 또는 source ~/.bashrc
 
 ## 사용법
 
-### Solo 모드
-
 ```bash
-cc                    # Anthropic 직접 연결 (--dangerously-skip-permissions 사용)
-cc --model glm        # GLM 모델 사용 (--dangerously-skip-permissions 사용)
-cc --model codex      # Codex 모델 사용 (--dangerously-skip-permissions 사용)
-```
-
-### Teams 모드
-
-```bash
-ct                          # 전원 Anthropic (--dangerously-skip-permissions 사용)
-ct --teammate codex         # Leader: Anthropic, Teammates: Codex (--dangerously-skip-permissions 사용)
-ct --teammate glm           # Leader: Anthropic, Teammates: GLM (--dangerously-skip-permissions 사용)
-ct --leader codex           # Leader: Codex, Teammates: Anthropic (--dangerously-skip-permissions 사용)
-ct -l codex -t glm          # Leader: Codex, Teammates: GLM (--dangerously-skip-permissions 사용)
+cc                    # Claude Code (Anthropic direct)
+cc --model glm        # Claude Code with GLM
+cc --model codex      # Claude Code with Codex
+cc --model kimi       # Claude Code with Kimi
 ```
 
 ### 진단
@@ -151,17 +140,16 @@ vim ~/.claude-models/glm.env
 MODEL_AUTH_TOKEN="your-glm-api-key"
 ```
 
-**멀티 키 (round-robin):**
+**멀티 키:**
 
-여러 키를 쉼표로 구분하면 teammate pane 생성 시마다 자동 순환 배정됩니다:
+여러 키를 쉼표로 구분하여 등록할 수 있습니다:
 
 ```bash
 MODEL_AUTH_TOKENS="GLM_KEY_1,GLM_KEY_2,GLM_KEY_3"
 ```
 
 - `MODEL_AUTH_TOKENS` 설정 시 `MODEL_AUTH_TOKEN`보다 우선합니다
-- 각 pane은 생성 시점에 배정된 키를 고정 사용합니다
-- 상태 파일: `~/.claude-models/.hybrid-rr/<model>.idx`
+- 첫 번째 키가 사용됩니다
 
 ### 커스텀 모델 추가
 
@@ -175,7 +163,7 @@ MODEL_SONNET="model-name"
 MODEL_OPUS="model-name"
 ```
 
-사용: `ct --teammate <name>` 또는 `cc --model <name>`
+사용: `cc --model <name>`
 
 ---
 
@@ -185,7 +173,6 @@ MODEL_OPUS="model-name"
 |--------|------|------|--------|
 | macOS | `brew services start cliproxyapi` | `brew services stop cliproxyapi` | `brew services restart cliproxyapi` |
 | Linux | `systemctl --user start cliproxyapi` | `systemctl --user stop cliproxyapi` | `systemctl --user restart cliproxyapi` |
-| WSL | `tmux new-session -d -s cliproxyapi cliproxyapi` | `tmux kill-session -t cliproxyapi` | 중지 후 시작 |
 
 ---
 

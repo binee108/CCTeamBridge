@@ -70,7 +70,7 @@ _do_backup() {
     local BACKUP_DIR="$HOME/.claude-hybrid-backup-$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$BACKUP_DIR"
     local count=0
-    for f in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.tmux.conf" "$HOME/.tmux-hybrid-hook.sh"; do
+    for f in "$HOME/.zshrc" "$HOME/.bashrc"; do
         [[ -f "$f" ]] && cp -p "$f" "$BACKUP_DIR/" && count=$((count + 1))
     done
     [[ -d "$MODELS_DIR" ]] && cp -rp "$MODELS_DIR" "$BACKUP_DIR/claude-models/" && count=$((count + 1))
@@ -83,7 +83,7 @@ _do_backup() {
 
 echo ""
 echo -e "${BOLD}CCTeamBridge v${VERSION}${RESET}"
-echo -e "Session-isolated | Leader & Teammates: Any model"
+echo -e "Model switching for Claude Code"
 echo "=================================================="
 echo ""
 
@@ -189,18 +189,6 @@ for RC in "$HOME/.zshrc" "$HOME/.bashrc"; do
         fi
     fi
 done
-
-# Clear global tmux env vars from old hook (6 specific variables)
-if command -v tmux &>/dev/null && tmux list-sessions &>/dev/null 2>&1; then
-    tmux set-environment -gu HYBRID_ACTIVE 2>/dev/null || true
-    tmux set-environment -gu ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
-    tmux set-environment -gu ANTHROPIC_BASE_URL 2>/dev/null || true
-    tmux set-environment -gu ANTHROPIC_DEFAULT_HAIKU_MODEL 2>/dev/null || true
-    tmux set-environment -gu ANTHROPIC_DEFAULT_SONNET_MODEL 2>/dev/null || true
-    tmux set-environment -gu ANTHROPIC_DEFAULT_OPUS_MODEL 2>/dev/null || true
-    _legacy_cleaned=$((_legacy_cleaned + 1))
-fi
-
 if ((_legacy_cleaned > 0)); then
     ok "Cleaned up ${_legacy_cleaned} legacy items"
 else
@@ -221,51 +209,6 @@ else
     echo ""
     exit 1
 fi
-
-# tmux (required) - check multiple install paths
-TMUX_BIN=""
-for p in \
-    "$(command -v tmux 2>/dev/null)" \
-    /usr/bin/tmux \
-    /usr/local/bin/tmux \
-    /opt/homebrew/bin/tmux \
-    /snap/bin/tmux \
-    "$HOME/.local/bin/tmux" \
-    "$HOME/bin/tmux"; do
-    [[ -n "$p" && -x "$p" ]] && TMUX_BIN="$p" && break
-done
-
-if [[ -n "$TMUX_BIN" ]]; then
-    ok "tmux found: $("$TMUX_BIN" -V 2>/dev/null) ($TMUX_BIN)"
-else
-    error "tmux is required but not installed"
-    echo ""
-    echo "  Install tmux using one of these methods:"
-    echo ""
-    case "$(uname -s)" in
-        Darwin)
-            echo "  Homebrew:       brew install tmux"
-            echo "  MacPorts:       sudo port install tmux"
-            echo "  Nix:            nix-env -iA nixpkgs.tmux"
-            ;;
-        Linux)
-            echo "  Ubuntu/Debian:  sudo apt install tmux"
-            echo "  Fedora/RHEL:    sudo dnf install tmux"
-            echo "  Arch Linux:     sudo pacman -S tmux"
-            echo "  Alpine:         sudo apk add tmux"
-            echo "  openSUSE:       sudo zypper install tmux"
-            echo "  Snap:           sudo snap install tmux --classic"
-            echo "  Nix:            nix-env -iA nixpkgs.tmux"
-            echo "  From source:    https://github.com/tmux/tmux/wiki/Installing"
-            ;;
-        *)
-            echo "  https://github.com/tmux/tmux/wiki/Installing"
-            ;;
-    esac
-    echo ""
-    exit 1
-fi
-
 # CLIProxyAPI detection function (reusable after install)
 _detect_cliproxy() {
     for p in \
@@ -439,7 +382,7 @@ if [[ "$_glm_needs_key" -eq 1 ]]; then
 
             ok "GLM API 키 ${#_glm_keys[@]}개 등록 완료"
             if [[ ${#_glm_keys[@]} -gt 1 ]]; then
-                info "멀티 키 round-robin: teammate pane마다 자동 순환 배정됩니다"
+                info "멀티 키 등록 완료 (첫 번째 키가 사용됩니다)"
             fi
         fi
     else
@@ -786,23 +729,13 @@ SVCEOF
                     pkill -f cliproxyapi 2>/dev/null || true
                     sleep 1
                 fi
-                if [[ -n "$TMUX_BIN" ]]; then
-                    "$TMUX_BIN" kill-session -t cliproxyapi 2>/dev/null || true
-                    "$TMUX_BIN" new-session -d -s cliproxyapi "$CLIPROXY_BIN"
-                    if "$TMUX_BIN" has-session -t cliproxyapi 2>/dev/null; then
-                        ok "Started CLIProxyAPI in tmux session"
-                    else
-                        warn "Failed to start CLIProxyAPI in tmux session"
-                    fi
+                mkdir -p "$HOME/.cache"
+                nohup "$CLIPROXY_BIN" > "$HOME/.cache/cliproxyapi.log" 2>&1 &
+                sleep 1
+                if pgrep -f cliproxyapi >/dev/null 2>&1; then
+                    ok "Started CLIProxyAPI in background"
                 else
-                    mkdir -p "$HOME/.cache"
-                    nohup "$CLIPROXY_BIN" > "$HOME/.cache/cliproxyapi.log" 2>&1 &
-                    sleep 1
-                    if pgrep -f cliproxyapi >/dev/null 2>&1; then
-                        ok "Started CLIProxyAPI in background"
-                    else
-                        warn "CLIProxyAPI background start may have failed (check $HOME/.cache/cliproxyapi.log)"
-                    fi
+                    warn "CLIProxyAPI background start may have failed (check $HOME/.cache/cliproxyapi.log)"
                 fi
             fi
             ;;
@@ -828,129 +761,7 @@ SVCEOF
     echo ""
 fi
 
-# ─── Step 2: zshenv (non-interactive shell support) ───
-if [[ "$SHELL_RC" == *".zshrc" ]]; then
-    info "Installing teammate env override to ~/.zshenv..."
-    ZSHENV="$HOME/.zshenv"
-    touch "$ZSHENV" 2>/dev/null || { error "Cannot write to $ZSHENV (check permissions)"; exit 1; }
-
-    # Remove existing block if present
-    if grep -q "$MARKER_START" "$ZSHENV" 2>/dev/null; then
-        sed -i.bak "/$MARKER_START/,/$MARKER_END/d" "$ZSHENV"
-        rm -f "${ZSHENV}.bak"
-    fi
-
-    cat >> "$ZSHENV" << 'ZSHENVEOF'
-# === CLAUDE HYBRID START ===
-# Teammate panes: force-reload model profile (runs in non-interactive shells too)
-if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ -f "$HOME/.claude-models/${HYBRID_ACTIVE}.env" ]]; then
-    source "$HOME/.claude-models/${HYBRID_ACTIVE}.env"
-    # NOTE: RR token-selection logic is duplicated in zshenv/bashrc blocks; keep both blocks in sync when editing.
-    if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
-        _HYBRID_TOKEN_CANDIDATES="${MODEL_AUTH_TOKENS:-${MODEL_AUTH_TOKEN:-}}"
-        _HYBRID_RR_COUNT=0
-
-        if [[ -n "$_HYBRID_TOKEN_CANDIDATES" ]]; then
-            while IFS= read -r _HYBRID_TOKEN_ITEM; do
-                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM#"${_HYBRID_TOKEN_ITEM%%[![:space:]]*}"}"
-                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM%"${_HYBRID_TOKEN_ITEM##*[![:space:]]}"}"
-                if [[ -n "$_HYBRID_TOKEN_ITEM" ]]; then
-                    _HYBRID_RR_COUNT=$((_HYBRID_RR_COUNT + 1))
-                fi
-            done < <(printf '%s\n' "$_HYBRID_TOKEN_CANDIDATES" | tr ',' '\n')
-        fi
-
-        if ((_HYBRID_RR_COUNT > 0)); then
-            _HYBRID_RR_DIR="$HOME/.claude-models/.hybrid-rr"
-            _HYBRID_RR_IDX_FILE="${_HYBRID_RR_DIR}/${HYBRID_ACTIVE}.idx"
-            _HYBRID_RR_LOCK="${_HYBRID_RR_DIR}/${HYBRID_ACTIVE}.lock"
-            _HYBRID_RR_INDEX=0
-
-            mkdir -p "$_HYBRID_RR_DIR"
-
-            # Acquire lock for atomic read-modify-write (flock preferred, mkdir fallback)
-            _HYBRID_RR_LOCK_FD=""
-            _HYBRID_RR_LOCK_MKDIR=0
-            if command -v flock >/dev/null 2>&1 && [[ -n "${BASH_VERSION:-}${ZSH_VERSION:-}" ]]; then
-                exec 201>"$_HYBRID_RR_LOCK" 2>/dev/null && _HYBRID_RR_LOCK_FD=201
-                if [[ -n "$_HYBRID_RR_LOCK_FD" ]]; then
-                    flock -w 3 "$_HYBRID_RR_LOCK_FD" 2>/dev/null || _HYBRID_RR_LOCK_FD=""
-                fi
-            fi
-            if [[ -z "$_HYBRID_RR_LOCK_FD" ]]; then
-                _lock_try=0
-                while ! mkdir "$_HYBRID_RR_LOCK" 2>/dev/null && ((_lock_try < 30)); do
-                    sleep 0.1; _lock_try=$((_lock_try + 1))
-                done
-                ((_lock_try < 30)) && _HYBRID_RR_LOCK_MKDIR=1
-            fi
-
-            if [[ -f "$_HYBRID_RR_IDX_FILE" ]]; then
-                read -r _HYBRID_RR_INDEX < "$_HYBRID_RR_IDX_FILE" || _HYBRID_RR_INDEX=0
-            fi
-            if [[ ! "$_HYBRID_RR_INDEX" =~ ^[0-9]+$ ]]; then
-                _HYBRID_RR_INDEX=0
-            fi
-
-            _HYBRID_RR_INDEX=$((_HYBRID_RR_INDEX % _HYBRID_RR_COUNT))
-            _HYBRID_RR_POS=0
-            _HYBRID_RR_SELECTED=""
-
-            while IFS= read -r _HYBRID_TOKEN_ITEM; do
-                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM#"${_HYBRID_TOKEN_ITEM%%[![:space:]]*}"}"
-                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM%"${_HYBRID_TOKEN_ITEM##*[![:space:]]}"}"
-                if [[ -n "$_HYBRID_TOKEN_ITEM" ]]; then
-                    if ((_HYBRID_RR_POS == _HYBRID_RR_INDEX)); then
-                        _HYBRID_RR_SELECTED="$_HYBRID_TOKEN_ITEM"
-                        break
-                    fi
-                    _HYBRID_RR_POS=$((_HYBRID_RR_POS + 1))
-                fi
-            done < <(printf '%s\n' "$_HYBRID_TOKEN_CANDIDATES" | tr ',' '\n')
-
-            if [[ -n "$_HYBRID_RR_SELECTED" ]]; then
-                export ANTHROPIC_AUTH_TOKEN="$_HYBRID_RR_SELECTED"
-            fi
-
-            _HYBRID_RR_NEXT=$(((_HYBRID_RR_INDEX + 1) % _HYBRID_RR_COUNT))
-            printf '%s\n' "$_HYBRID_RR_NEXT" > "$_HYBRID_RR_IDX_FILE" 2>/dev/null || true
-
-            # Release lock
-            [[ -n "$_HYBRID_RR_LOCK_FD" ]] && flock -u "$_HYBRID_RR_LOCK_FD" 2>/dev/null
-            ((_HYBRID_RR_LOCK_MKDIR)) && rmdir "$_HYBRID_RR_LOCK" 2>/dev/null
-        fi
-
-        unset _HYBRID_TOKEN_CANDIDATES _HYBRID_TOKEN_ITEM _HYBRID_RR_COUNT _HYBRID_RR_DIR _HYBRID_RR_IDX_FILE _HYBRID_RR_LOCK _HYBRID_RR_INDEX _HYBRID_RR_POS _HYBRID_RR_SELECTED _HYBRID_RR_NEXT _HYBRID_RR_LOCK_FD _HYBRID_RR_LOCK_MKDIR
-    fi
-    export ANTHROPIC_BASE_URL="$MODEL_BASE_URL"
-    export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL_HAIKU"
-    export ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL_SONNET"
-    export ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL_OPUS"
-    # Fix: Claude Code CLI forwards leader's ANTHROPIC_BASE_URL to teammate
-    # via inline "env" prefix. This wrapper intercepts and replaces with
-    # the correct teammate values from the session profile.
-    env() {
-        local _args
-        _args=()
-        for _a in "$@"; do
-            case "$_a" in
-                ANTHROPIC_AUTH_TOKEN=*)           _args+=("ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}") ;;
-                ANTHROPIC_BASE_URL=*)             _args+=("ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}") ;;
-                ANTHROPIC_DEFAULT_HAIKU_MODEL=*)  _args+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL}") ;;
-                ANTHROPIC_DEFAULT_SONNET_MODEL=*) _args+=("ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL}") ;;
-                ANTHROPIC_DEFAULT_OPUS_MODEL=*)   _args+=("ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL}") ;;
-                *) _args+=("$_a") ;;
-            esac
-        done
-        command env "${_args[@]}"
-    }
-fi
-# === CLAUDE HYBRID END ===
-ZSHENVEOF
-    ok "Installed teammate env override to ~/.zshenv"
-fi
-
-# ─── Step 4: Shell functions ───
+# ─── Shell functions installation ───
 info "Installing shell functions to $SHELL_RC..."
 
 touch "$SHELL_RC" 2>/dev/null || { error "Cannot write to $SHELL_RC (check permissions)"; exit 1; }
@@ -968,130 +779,13 @@ $MARKER_START
 ${VERSION_TAG}${VERSION}
 SHELLEOF
 
-# Part 2: Env propagation block (bash only — zsh uses .zshenv)
-if [[ "$SHELL_RC" == *".bashrc" ]]; then
-    cat >> "$SHELL_RC" << 'BASHEOF'
-
-# --- LLM Provider Switcher ---
-# Teammate panes: reload model profile to override any leaked leader env vars
-if [[ -n "$HYBRID_ACTIVE" ]] && [[ "$HYBRID_ACTIVE" =~ ^[a-zA-Z0-9_-]+$ ]] && [[ -f "$HOME/.claude-models/${HYBRID_ACTIVE}.env" ]]; then
-    source "$HOME/.claude-models/${HYBRID_ACTIVE}.env"
-    # NOTE: RR token-selection logic is duplicated in zshenv/bashrc blocks; keep both blocks in sync when editing.
-    if [[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]]; then
-        _HYBRID_TOKEN_CANDIDATES="${MODEL_AUTH_TOKENS:-${MODEL_AUTH_TOKEN:-}}"
-        _HYBRID_RR_COUNT=0
-
-        if [[ -n "$_HYBRID_TOKEN_CANDIDATES" ]]; then
-            while IFS= read -r _HYBRID_TOKEN_ITEM; do
-                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM#"${_HYBRID_TOKEN_ITEM%%[![:space:]]*}"}"
-                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM%"${_HYBRID_TOKEN_ITEM##*[![:space:]]}"}"
-                if [[ -n "$_HYBRID_TOKEN_ITEM" ]]; then
-                    _HYBRID_RR_COUNT=$((_HYBRID_RR_COUNT + 1))
-                fi
-            done < <(printf '%s\n' "$_HYBRID_TOKEN_CANDIDATES" | tr ',' '\n')
-        fi
-
-        if ((_HYBRID_RR_COUNT > 0)); then
-            _HYBRID_RR_DIR="$HOME/.claude-models/.hybrid-rr"
-            _HYBRID_RR_IDX_FILE="${_HYBRID_RR_DIR}/${HYBRID_ACTIVE}.idx"
-            _HYBRID_RR_LOCK="${_HYBRID_RR_DIR}/${HYBRID_ACTIVE}.lock"
-            _HYBRID_RR_INDEX=0
-
-            mkdir -p "$_HYBRID_RR_DIR"
-
-            # Acquire lock for atomic read-modify-write (flock preferred, mkdir fallback)
-            _HYBRID_RR_LOCK_FD=""
-            _HYBRID_RR_LOCK_MKDIR=0
-            if command -v flock >/dev/null 2>&1 && [[ -n "${BASH_VERSION:-}${ZSH_VERSION:-}" ]]; then
-                exec 201>"$_HYBRID_RR_LOCK" 2>/dev/null && _HYBRID_RR_LOCK_FD=201
-                if [[ -n "$_HYBRID_RR_LOCK_FD" ]]; then
-                    flock -w 3 "$_HYBRID_RR_LOCK_FD" 2>/dev/null || _HYBRID_RR_LOCK_FD=""
-                fi
-            fi
-            if [[ -z "$_HYBRID_RR_LOCK_FD" ]]; then
-                _lock_try=0
-                while ! mkdir "$_HYBRID_RR_LOCK" 2>/dev/null && ((_lock_try < 30)); do
-                    sleep 0.1; _lock_try=$((_lock_try + 1))
-                done
-                ((_lock_try < 30)) && _HYBRID_RR_LOCK_MKDIR=1
-            fi
-
-            if [[ -f "$_HYBRID_RR_IDX_FILE" ]]; then
-                read -r _HYBRID_RR_INDEX < "$_HYBRID_RR_IDX_FILE" || _HYBRID_RR_INDEX=0
-            fi
-            if [[ ! "$_HYBRID_RR_INDEX" =~ ^[0-9]+$ ]]; then
-                _HYBRID_RR_INDEX=0
-            fi
-
-            _HYBRID_RR_INDEX=$((_HYBRID_RR_INDEX % _HYBRID_RR_COUNT))
-            _HYBRID_RR_POS=0
-            _HYBRID_RR_SELECTED=""
-
-            while IFS= read -r _HYBRID_TOKEN_ITEM; do
-                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM#"${_HYBRID_TOKEN_ITEM%%[![:space:]]*}"}"
-                _HYBRID_TOKEN_ITEM="${_HYBRID_TOKEN_ITEM%"${_HYBRID_TOKEN_ITEM##*[![:space:]]}"}"
-                if [[ -n "$_HYBRID_TOKEN_ITEM" ]]; then
-                    if ((_HYBRID_RR_POS == _HYBRID_RR_INDEX)); then
-                        _HYBRID_RR_SELECTED="$_HYBRID_TOKEN_ITEM"
-                        break
-                    fi
-                    _HYBRID_RR_POS=$((_HYBRID_RR_POS + 1))
-                fi
-            done < <(printf '%s\n' "$_HYBRID_TOKEN_CANDIDATES" | tr ',' '\n')
-
-            if [[ -n "$_HYBRID_RR_SELECTED" ]]; then
-                export ANTHROPIC_AUTH_TOKEN="$_HYBRID_RR_SELECTED"
-            fi
-
-            _HYBRID_RR_NEXT=$(((_HYBRID_RR_INDEX + 1) % _HYBRID_RR_COUNT))
-            printf '%s\n' "$_HYBRID_RR_NEXT" > "$_HYBRID_RR_IDX_FILE" 2>/dev/null || true
-
-            # Release lock
-            [[ -n "$_HYBRID_RR_LOCK_FD" ]] && flock -u "$_HYBRID_RR_LOCK_FD" 2>/dev/null
-            ((_HYBRID_RR_LOCK_MKDIR)) && rmdir "$_HYBRID_RR_LOCK" 2>/dev/null
-        fi
-
-        unset _HYBRID_TOKEN_CANDIDATES _HYBRID_TOKEN_ITEM _HYBRID_RR_COUNT _HYBRID_RR_DIR _HYBRID_RR_IDX_FILE _HYBRID_RR_LOCK _HYBRID_RR_INDEX _HYBRID_RR_POS _HYBRID_RR_SELECTED _HYBRID_RR_NEXT _HYBRID_RR_LOCK_FD _HYBRID_RR_LOCK_MKDIR
-    fi
-    export ANTHROPIC_BASE_URL="$MODEL_BASE_URL"
-    export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL_HAIKU"
-    export ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL_SONNET"
-    export ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL_OPUS"
-    # Fix: Claude Code CLI forwards leader's ANTHROPIC_BASE_URL to teammate
-    env() {
-        local _args
-        _args=()
-        for _a in "$@"; do
-            case "$_a" in
-                ANTHROPIC_AUTH_TOKEN=*)           _args+=("ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}") ;;
-                ANTHROPIC_BASE_URL=*)             _args+=("ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}") ;;
-                ANTHROPIC_DEFAULT_HAIKU_MODEL=*)  _args+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL}") ;;
-                ANTHROPIC_DEFAULT_SONNET_MODEL=*) _args+=("ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL}") ;;
-                ANTHROPIC_DEFAULT_OPUS_MODEL=*)   _args+=("ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL}") ;;
-                *) _args+=("$_a") ;;
-            esac
-        done
-        command env "${_args[@]}"
-    }
-fi
-BASHEOF
-fi
-
-# Part 3: Helpers + functions (common to both shells)
+# Part 2: Helpers + functions (common to both shells)
 cat >> "$SHELL_RC" << SHELLEOF
 
 # --- Helpers ---
 _claude_unset_model_vars() {
-    unset HYBRID_ACTIVE ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
+    unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
     unset ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL
-    if [[ -n "\$TMUX" ]]; then
-        tmux set-environment -u HYBRID_ACTIVE 2>/dev/null
-        tmux set-environment -u ANTHROPIC_AUTH_TOKEN 2>/dev/null
-        tmux set-environment -u ANTHROPIC_BASE_URL 2>/dev/null
-        tmux set-environment -u ANTHROPIC_DEFAULT_HAIKU_MODEL 2>/dev/null
-        tmux set-environment -u ANTHROPIC_DEFAULT_SONNET_MODEL 2>/dev/null
-        tmux set-environment -u ANTHROPIC_DEFAULT_OPUS_MODEL 2>/dev/null
-    fi
 }
 
 _claude_collect_model_tokens_from_loaded_env() {
@@ -1112,52 +806,6 @@ _claude_first_model_token_from_loaded_env() {
     local _first
     _first="\$(_claude_collect_model_tokens_from_loaded_env | head -n 1)"
     [[ -n "\$_first" ]] && printf '%s' "\$_first"
-}
-
-_claude_select_rr_token_for_model() {
-    local model="\$1"
-    local profile="\$HOME/.claude-models/\${model}.env"
-    local rr_dir="\$HOME/.claude-models/.hybrid-rr"
-    local idx_file="\${rr_dir}/\${model}.idx"
-    local tokens=()
-    local count=0
-    local idx=0
-    local token=""
-    local next_idx=0
-
-    if [[ -z "\$model" ]] || [[ ! "\$model" =~ ^[a-zA-Z0-9_-]+\$ ]] || [[ ! -f "\$profile" ]]; then
-        return 1
-    fi
-
-    source "\$profile"
-    while IFS= read -r token; do
-        tokens+=("\$token")
-    done < <(_claude_collect_model_tokens_from_loaded_env)
-
-    count=\${#tokens[@]}
-    if ((count == 0)); then
-        return 1
-    fi
-
-    mkdir -p "\$rr_dir"
-
-    if [[ -f "\$idx_file" ]]; then
-        read -r idx < "\$idx_file" || idx=0
-    else
-        idx=0
-    fi
-
-    if [[ ! "\$idx" =~ ^[0-9]+\$ ]]; then
-        idx=0
-    fi
-
-    idx=\$((idx % count))
-    token="\${tokens[idx]}"
-    next_idx=\$(((idx + 1) % count))
-
-    printf '%s\n' "\$next_idx" > "\$idx_file" 2>/dev/null || true
-    printf '%s' "\$token"
-    return 0
 }
 
 _claude_load_model() {
@@ -1182,7 +830,7 @@ _claude_load_model() {
     export ANTHROPIC_DEFAULT_OPUS_MODEL="\$MODEL_OPUS"
 }
 
-# --- cdoctor: Validate current hybrid setup ---
+# --- cdoctor: Validate setup ---
 cdoctor() {
     local ok_count=0
     local warn_count=0
@@ -1202,7 +850,7 @@ cdoctor() {
     }
 
     echo ""
-    echo "Claude Hybrid Doctor"
+    echo "CCTeamBridge Doctor"
     echo "===================="
 
     if command -v claude >/dev/null 2>&1; then
@@ -1210,13 +858,6 @@ cdoctor() {
     else
         _doctor_err "Claude Code CLI not found in PATH"
     fi
-
-    if command -v tmux >/dev/null 2>&1; then
-        _doctor_ok "tmux found: \$(tmux -V 2>/dev/null || echo installed)"
-    else
-        _doctor_err "tmux not found in PATH"
-    fi
-
     if [[ -d "\$HOME/.claude-models" ]]; then
         _doctor_ok "Model profile directory exists: \$HOME/.claude-models"
     else
@@ -1247,20 +888,12 @@ cdoctor() {
     local shell_blocks=0
     for rc in "\$HOME/.zshrc" "\$HOME/.bashrc"; do
         if [[ -f "\$rc" ]] && grep -q "# === CLAUDE HYBRID START ===" "\$rc" 2>/dev/null; then
-            _doctor_ok "Hybrid shell block found in \${rc}"
+            _doctor_ok "Shell function block found in \${rc}"
             shell_blocks=\$((shell_blocks + 1))
         fi
     done
     if ((shell_blocks == 0)); then
-        _doctor_err "Hybrid shell block not found in ~/.zshrc or ~/.bashrc"
-    fi
-
-    if [[ -n "\${ZSH_VERSION:-}" ]] || [[ "\${SHELL:-}" == *zsh* ]]; then
-        if [[ -f "\$HOME/.zshenv" ]] && grep -q "# === CLAUDE HYBRID START ===" "\$HOME/.zshenv" 2>/dev/null; then
-            _doctor_ok "zsh teammate env block found in ~/.zshenv"
-        else
-            _doctor_warn "zsh detected but ~/.zshenv hybrid block is missing"
-        fi
+        _doctor_err "Shell function block not found in ~/.zshrc or ~/.bashrc"
     fi
 
     local cliproxy_bin=""
@@ -1347,125 +980,6 @@ function cc() {
     claude --dangerously-skip-permissions "\${ARGS[@]}"
 }
 
-# --- ct: Claude Code Teams (hybrid) ---
-ct() {
-    local LEADER=""
-    local TEAMMATE=""
-    local CLAUDE_ARGS=()
-
-    while [[ \$# -gt 0 ]]; do
-        case "\$1" in
-            --leader|-l) [[ \$# -lt 2 ]] && echo "Error: --leader requires a value" && return 1; LEADER="\$2"; shift 2 ;;
-            --teammate|-t) [[ \$# -lt 2 ]] && echo "Error: --teammate requires a value" && return 1; TEAMMATE="\$2"; shift 2 ;;
-            --)
-                CLAUDE_ARGS+=("\$@")
-                break
-                ;;
-            *)
-                CLAUDE_ARGS+=("\$1")
-                shift
-                ;;
-        esac
-    done
-
-    # Validate model profile names early (allowlist)
-    if [[ -n "\$LEADER" && ! "\$LEADER" =~ ^[a-zA-Z0-9_-]+\$ ]]; then
-        echo "Error: Invalid leader model name '\$LEADER' (alphanumeric, dash, underscore only)"
-        return 1
-    fi
-    if [[ -n "\$TEAMMATE" && ! "\$TEAMMATE" =~ ^[a-zA-Z0-9_-]+\$ ]]; then
-        echo "Error: Invalid teammate model name '\$TEAMMATE' (alphanumeric, dash, underscore only)"
-        return 1
-    fi
-
-    # Validate model profiles
-    if [[ -n "\$LEADER" && ! -f "\$HOME/.claude-models/\${LEADER}.env" ]]; then
-        echo "Error: Unknown leader model '\$LEADER'. Available:"
-        ls ~/.claude-models/*.env 2>/dev/null | xargs -I{} basename {} .env | sed 's/^/  /'
-        return 1
-    fi
-    if [[ -n "\$TEAMMATE" && ! -f "\$HOME/.claude-models/\${TEAMMATE}.env" ]]; then
-        echo "Error: Unknown teammate model '\$TEAMMATE'. Available:"
-        ls ~/.claude-models/*.env 2>/dev/null | xargs -I{} basename {} .env | sed 's/^/  /'
-        return 1
-    fi
-
-    local PROJECT_DIR="\$(pwd)"
-    local PROJECT_NAME="\$(basename "\$PROJECT_DIR")"
-
-    # Session naming
-    local SESSION="claude-teams"
-    if [[ -n "\$LEADER" && -n "\$TEAMMATE" ]]; then
-        SESSION="claude-teams-\${LEADER}-\${TEAMMATE}"
-    elif [[ -n "\$TEAMMATE" ]]; then
-        SESSION="claude-teams-\${TEAMMATE}"
-    elif [[ -n "\$LEADER" ]]; then
-        SESSION="claude-teams-\${LEADER}"
-    fi
-
-    # Increment session name if already exists
-    if tmux has-session -t "\$SESSION" 2>/dev/null; then
-        local i=1
-        while tmux has-session -t "\${SESSION}-\${i}" 2>/dev/null; do
-            i=\$((i + 1))
-        done
-        SESSION="\${SESSION}-\${i}"
-    fi
-
-    # Create session (session-scoped env only, no global state)
-    tmux new-session -d -s "\$SESSION" -n "\$PROJECT_NAME" -c "\$PROJECT_DIR" || {
-        echo "Error: Failed to create tmux session '\$SESSION'"
-        return 1
-    }
-    if ! tmux has-session -t "\$SESSION" 2>/dev/null; then
-        echo "Error: tmux session '\$SESSION' was not created"
-        return 1
-    fi
-
-    # Also set session-specific env (overrides global for this session)
-    if [[ -n "\$TEAMMATE" ]]; then
-        (
-            source "\$HOME/.claude-models/\${TEAMMATE}.env"
-            tmux set-environment -t "\$SESSION" HYBRID_ACTIVE "\$TEAMMATE"
-            tmux set-environment -t "\$SESSION" -u ANTHROPIC_AUTH_TOKEN 2>/dev/null
-            tmux set-environment -t "\$SESSION" ANTHROPIC_BASE_URL "\$MODEL_BASE_URL"
-            tmux set-environment -t "\$SESSION" ANTHROPIC_DEFAULT_HAIKU_MODEL "\$MODEL_HAIKU"
-            tmux set-environment -t "\$SESSION" ANTHROPIC_DEFAULT_SONNET_MODEL "\$MODEL_SONNET"
-            tmux set-environment -t "\$SESSION" ANTHROPIC_DEFAULT_OPUS_MODEL "\$MODEL_OPUS"
-        )
-    else
-        tmux set-environment -t "\$SESSION" -u HYBRID_ACTIVE 2>/dev/null
-        tmux set-environment -t "\$SESSION" -u ANTHROPIC_AUTH_TOKEN 2>/dev/null
-        tmux set-environment -t "\$SESSION" -u ANTHROPIC_BASE_URL 2>/dev/null
-        tmux set-environment -t "\$SESSION" -u ANTHROPIC_DEFAULT_HAIKU_MODEL 2>/dev/null
-        tmux set-environment -t "\$SESSION" -u ANTHROPIC_DEFAULT_SONNET_MODEL 2>/dev/null
-        tmux set-environment -t "\$SESSION" -u ANTHROPIC_DEFAULT_OPUS_MODEL 2>/dev/null
-    fi
-
-    local CLAUDE_CMD="claude --dangerously-skip-permissions --teammate-mode tmux"
-    local _claude_arg
-    for _claude_arg in "\${CLAUDE_ARGS[@]}"; do
-        CLAUDE_CMD+=" \$(printf '%q' "\$_claude_arg")"
-    done
-
-    # Launch leader pane
-    if [[ -n "\$LEADER" ]]; then
-        local _leader_quoted
-        _leader_quoted="\$(printf '%q' "\$LEADER")"
-        tmux send-keys -t "\$SESSION" \\
-            "_claude_load_model \${_leader_quoted} && \\
-            export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 && \\
-            \$CLAUDE_CMD" Enter
-    else
-        tmux send-keys -t "\$SESSION" \\
-            "unset HYBRID_ACTIVE ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL; \\
-            export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1; \\
-            \$CLAUDE_CMD" Enter
-    fi
-
-    tmux attach -t "\$SESSION"
-}
-
 # --- Aliases ---
 $MARKER_END
 SHELLEOF
@@ -1485,11 +999,8 @@ echo ""
 echo -e "${BOLD}Usage:${RESET}"
 echo "  cc                          # Claude Code (Anthropic direct)"
 echo "  cc --model glm              # Claude Code with GLM"
-echo "  ct                          # Teams (all Anthropic)"
-echo "  ct --teammate glm           # Teams (leader: Anthropic, teammates: GLM)"
-echo "  ct -l codex -t glm          # Teams (leader: Codex, teammates: GLM)"
-echo "  ct --leader kimi            # Teams (leader: Kimi, teammates: Anthropic)"
-echo "  cdoctor                     # Diagnose hybrid setup health"
+echo "  cc --model codex            # Claude Code with Codex"
+echo "  cdoctor                     # Diagnose setup health"
 echo ""
 echo -e "${BOLD}Configure your API keys:${RESET}"
 echo "  vim ~/.claude-models/glm.env      # Set GLM API key"
@@ -1498,5 +1009,5 @@ echo ""
 echo -e "${BOLD}Add a new model:${RESET}"
 echo "  Create ~/.claude-models/<name>.env with:"
 echo "    MODEL_AUTH_TOKEN, MODEL_BASE_URL, MODEL_HAIKU, MODEL_SONNET, MODEL_OPUS"
-echo "  Then use: ct --leader <name> or ct --teammate <name>"
+echo "  Then use: cc --model <name>"
 echo ""

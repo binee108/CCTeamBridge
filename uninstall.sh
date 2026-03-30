@@ -6,10 +6,10 @@ set -euo pipefail
 BOLD="\033[1m"
 GREEN="\033[32m"
 YELLOW="\033[33m"
-RED="\033[31m"
+CYAN="\033[36m"
 RESET="\033[0m"
 
-info()  { echo -e "\033[36m[INFO]\033[0m $1"; }
+info()  { echo -e "${CYAN}[INFO]${RESET} $1"; }
 ok()    { echo -e "${GREEN}[OK]${RESET} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${RESET} $1"; }
 
@@ -21,8 +21,8 @@ echo -e "${BOLD}Uninstalling CCTeamBridge${RESET}"
 echo "=============================================="
 echo ""
 
-# Remove shell functions
-for RC in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.zshenv"; do
+# Remove shell function blocks from RC files
+for RC in "$HOME/.zshrc" "$HOME/.bashrc"; do
     if [[ -f "$RC" ]] && grep -q "$MARKER_START" "$RC" 2>/dev/null; then
         sed -i.bak "/$MARKER_START/,/$MARKER_END/d" "$RC"
         rm -f "${RC}.bak"
@@ -30,39 +30,30 @@ for RC in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.zshenv"; do
     fi
 done
 
-# Remove tmux hook from config
-if [[ -f "$HOME/.tmux.conf" ]]; then
-    if grep -q 'tmux-hybrid-hook' "$HOME/.tmux.conf"; then
-        sed -i.bak '/HYBRID MODEL HOOK/d; /tmux-hybrid-hook/d' "$HOME/.tmux.conf"
-        rm -f "$HOME/.tmux.conf.bak"
-        ok "Removed hook from tmux.conf"
-    fi
-    tmux source-file "$HOME/.tmux.conf" 2>/dev/null || true
+# Remove zshenv block (legacy cleanup)
+if [[ -f "$HOME/.zshenv" ]] && grep -q "$MARKER_START" "$HOME/.zshenv" 2>/dev/null; then
+    sed -i.bak "/$MARKER_START/,/$MARKER_END/d" "$HOME/.zshenv"
+    rm -f "$HOME/.zshenv.bak"
+    ok "Removed hybrid block from ~/.zshenv"
 fi
 
-# Remove hook script
-rm -f "$HOME/.tmux-hybrid-hook.sh"
-ok "Removed hook script"
-
-# Remove marker file
+# Remove legacy artifacts
 rm -f "$HOME/.claude-hybrid-active"
 ok "Removed active marker"
 
-# Remove round-robin state artifacts
 if [[ -d "$HOME/.claude-models/.hybrid-rr" ]]; then
     rm -rf "$HOME/.claude-models/.hybrid-rr"
     ok "Removed round-robin state directory"
 fi
 
-# Clear global tmux env vars
-if command -v tmux &>/dev/null && tmux list-sessions &>/dev/null 2>&1; then
-    tmux set-environment -gu HYBRID_ACTIVE 2>/dev/null || true
-    tmux set-environment -gu ANTHROPIC_AUTH_TOKEN 2>/dev/null || true
-    tmux set-environment -gu ANTHROPIC_BASE_URL 2>/dev/null || true
-    tmux set-environment -gu ANTHROPIC_DEFAULT_HAIKU_MODEL 2>/dev/null || true
-    tmux set-environment -gu ANTHROPIC_DEFAULT_SONNET_MODEL 2>/dev/null || true
-    tmux set-environment -gu ANTHROPIC_DEFAULT_OPUS_MODEL 2>/dev/null || true
-    ok "Cleared global tmux env vars"
+# Remove tmux hook script (legacy)
+rm -f "$HOME/.tmux-hybrid-hook.sh"
+
+# Remove hook entries from tmux.conf (legacy)
+if [[ -f "$HOME/.tmux.conf" ]] && grep -q 'tmux-hybrid-hook' "$HOME/.tmux.conf" 2>/dev/null; then
+    sed -i.bak '/HYBRID MODEL HOOK/d; /tmux-hybrid-hook/d' "$HOME/.tmux.conf"
+    rm -f "$HOME/.tmux.conf.bak"
+    ok "Removed legacy tmux hook from ~/.tmux.conf"
 fi
 
 echo ""
