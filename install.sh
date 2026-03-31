@@ -209,7 +209,7 @@ else
     echo ""
     exit 1
 fi
-# CLIProxyAPI detection function (reusable after install)
+# CLIProxyAPI detection (kept for OAuth login migration)
 _detect_cliproxy() {
     for p in \
         "$(command -v cliproxyapi 2>/dev/null)" \
@@ -218,68 +218,92 @@ _detect_cliproxy() {
         /usr/local/bin/cli-proxy-api \
         /opt/homebrew/bin/cliproxyapi \
         /opt/homebrew/bin/cli-proxy-api \
-        /usr/bin/cliproxyapi \
-        /usr/bin/cli-proxy-api \
-        /snap/bin/cliproxyapi \
-        /snap/bin/cli-proxy-api \
         "$HOME/.local/bin/cliproxyapi" \
-        "$HOME/.local/bin/cli-proxy-api" \
-        "$HOME/bin/cliproxyapi" \
-        "$HOME/bin/cli-proxy-api" \
-        "$HOME/go/bin/cliproxyapi" \
-        "$HOME/go/bin/cli-proxy-api"; do
+        "$HOME/.local/bin/cli-proxy-api"; do
         [[ -n "$p" && -x "$p" ]] && echo "$p" && return 0
     done
     return 1
 }
 
+# --- Python proxy setup ---
+_setup_proxy() {
+    local CCBRIDGE_DIR="$HOME/.ccbridge"
+    local VENV_DIR="$CCBRIDGE_DIR/venv"
+    local PROXY_SRC
+
+    # Find proxy source (git repo or standalone)
+    local _script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$_script_dir/proxy/__init__.py" ]]; then
+        PROXY_SRC="$_script_dir"
+    elif [[ -f "$HOME/CCTeamBridge/proxy/__init__.py" ]]; then
+        PROXY_SRC="$HOME/CCTeamBridge"
+    else
+        warn "Proxy source not found"
+        return 1
+    fi
+
+    # Create venv and install deps
+    if [[ ! -f "$VENV_DIR/bin/python3" ]]; then
+        info "Creating Python virtual environment..."
+        python3 -m venv "$VENV_DIR" || { warn "Failed to create venv"; return 1; }
+    fi
+
+    if ! "$VENV_DIR/bin/python3" -c "import aiohttp" 2>/dev/null; then
+        info "Installing proxy dependencies..."
+        "$VENV_DIR/bin/pip" install -q aiohttp pyyaml || { warn "Failed to install deps"; return 1; }
+    fi
+
+    # Copy proxy files to ~/.ccbridge/proxy/
+    mkdir -p "$CCBRIDGE_DIR/proxy"
+    cp -r "$PROXY_SRC/proxy/"* "$CCBRIDGE_DIR/proxy/" 2>/dev/null || true
+
+    # Create default config if missing
+    if [[ ! -f "$CCBRIDGE_DIR/config.yaml" ]]; then
+        cat > "$CCBRIDGE_DIR/config.yaml" << 'CONFEOF'
+port: 8317
+host: "127.0.0.1"
+
+glm:
+  base_url: "https://api.z.ai/api/anthropic"
+  api_keys: []
+
+codex:
+  base_url: "https://api.anthropic.com"
+
+claude:
+  base_url: "https://api.anthropic.com"
+
+kimi:
+  base_url: "https://api.anthropic.com"
+
+credential_dir: "~/.ccbridge/credentials"
+CONFEOF
+        ok "Created default config: $CCBRIDGE_DIR/config.yaml"
+    fi
+
+    ok "Proxy setup complete"
+}
+
 CLIPROXY_BIN="$(_detect_cliproxy)" || CLIPROXY_BIN=""
 
-if [[ -n "$CLIPROXY_BIN" ]]; then
-    ok "CLIProxyAPI found ($CLIPROXY_BIN)"
-else
-    warn "CLIProxyAPI not found"
-    echo ""
-    case "$(uname -s)" in
-        Darwin*)
-            echo "  실행할 명령어: brew install cliproxyapi"
-            ;;
-        *)
-            echo "  Linux/WSL에서는 외부 설치 스크립트를 자동 실행하지 않습니다."
-            echo "  CLIProxyAPI 공식 저장소/공식 문서의 수동 설치 절차를 따라 설치하세요."
-            ;;
-    esac
-    echo ""
-    echo -ne "  ${BOLD}CLIProxyAPI를 지금 설치하시겠습니까? [Y/n]:${RESET} "
-    _read_tty_prompt_default _confirm "Y" "CLIProxyAPI install prompt" "N" >/dev/null || true
-    if [[ -z "$_confirm" || "$_confirm" =~ ^[Yy] ]]; then
-        echo ""
-        case "$(uname -s)" in
-            Darwin*)
-                info "CLIProxyAPI 설치 중 (brew)..."
-                if command -v brew &>/dev/null && brew install cliproxyapi; then
-                    ok "brew로 CLIProxyAPI 설치 완료"
-                else
-                    warn "brew 설치가 실패했습니다. GLM-only 설치를 계속 진행합니다."
-                fi
-                ;;
-            *)
-                info "Linux/WSL에서는 CLIProxyAPI 자동 설치를 실행하지 않습니다."
-                info "CLIProxyAPI 공식 저장소/공식 문서의 수동 설치 절차를 완료한 뒤 다시 실행할 수 있습니다."
-                info "지금은 GLM-only 설치를 계속 진행합니다."
-                ;;
-        esac
-        echo ""
-        # Re-detect after install
-        CLIPROXY_BIN="$(_detect_cliproxy)" || CLIPROXY_BIN=""
-        if [[ -n "$CLIPROXY_BIN" ]]; then
-            ok "CLIProxyAPI 설치 완료 ($CLIPROXY_BIN)"
+# Detect Python 3 and setup the built-in proxy
+PROXY_READY=0
+if command -v python3 &>/dev/null; then
+    _py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")"
+    if [[ "$(echo "$_py_ver" | awk -F. '{print ($1*100)+$2}')" -ge 309 ]]; then
+        ok "Python ${_py_ver} found"
+        if _setup_proxy; then
+            PROXY_READY=1
         else
-            warn "CLIProxyAPI 설치에 실패했습니다. GLM-only 사용은 계속 가능합니다."
+            warn "Proxy setup failed; proxy-dependent profiles may not work"
         fi
     else
-        info "CLIProxyAPI 설치를 건너뜁니다. GLM-only 설치를 계속 진행합니다."
+        warn "Python ${_py_ver} found but >= 3.9 required for built-in proxy"
+        info "GLM-only installation will continue"
     fi
+else
+    warn "Python3 not found; built-in proxy unavailable"
+    info "GLM-only installation will continue"
 fi
 
 # ─── Step 1: Model profiles directory ───
@@ -291,7 +315,7 @@ if [[ ! -f "$MODELS_DIR/glm.env" ]]; then
 # GLM API Profile
 # Get your API key at: https://z.ai/manage-apikey/apikey-list
 MODEL_AUTH_TOKEN="YOUR_GLM_API_KEY_HERE"
-MODEL_BASE_URL="https://open.bigmodel.cn/api/anthropic"
+MODEL_BASE_URL="https://api.z.ai/api/anthropic"
 MODEL_HAIKU="glm-4.7"
 MODEL_SONNET="glm-5"
 MODEL_OPUS="glm-5"
@@ -373,7 +397,7 @@ if [[ "$_glm_needs_key" -eq 1 ]]; then
                     echo "MODEL_AUTH_TOKENS=\"${_glm_token_str}\""
                 fi
                 echo "MODEL_AUTH_TOKEN=\"${_glm_keys[0]}\""
-                echo 'MODEL_BASE_URL="https://open.bigmodel.cn/api/anthropic"'
+                echo 'MODEL_BASE_URL="https://api.z.ai/api/anthropic"'
                 echo 'MODEL_HAIKU="glm-4.7"'
                 echo 'MODEL_SONNET="glm-5"'
                 echo 'MODEL_OPUS="glm-5"'
@@ -394,23 +418,22 @@ fi
 
 if [[ ! -f "$MODELS_DIR/codex.env" ]]; then
     cat > "$MODELS_DIR/codex.env" << 'EOF'
-# Codex API Profile (requires CLIProxyAPI)
-# Install: brew install cliproxyapi && cli-proxy-api --codex-login
+# Codex API Profile (via ccbridge-proxy)
 MODEL_AUTH_TOKEN="sk-dummy"
 MODEL_BASE_URL="http://127.0.0.1:8317"
-MODEL_HAIKU="gpt-5.3-codex"
+MODEL_HAIKU="gpt-5.3-codex-spark"
 MODEL_SONNET="gpt-5.3-codex"
 MODEL_OPUS="gpt-5.3-codex"
 EOF
     chmod 600 "$MODELS_DIR/codex.env"
-    ok "Created codex.env (CLIProxyAPI required)"
+    ok "Created codex.env (requires ccbridge-proxy)"
 else
     ok "codex.env already exists, skipping"
 fi
 
 if [[ ! -f "$MODELS_DIR/kimi.env" ]]; then
     cat > "$MODELS_DIR/kimi.env" << 'EOF'
-# Kimi API Profile (requires CLIProxyAPI)
+# Kimi API Profile (via ccbridge-proxy)
 MODEL_AUTH_TOKEN="PLACEHOLDER"
 MODEL_BASE_URL="http://localhost:8317/api/anthropic"
 MODEL_HAIKU="kimi-latest"
@@ -418,16 +441,16 @@ MODEL_SONNET="kimi-latest"
 MODEL_OPUS="kimi-latest"
 EOF
     chmod 600 "$MODELS_DIR/kimi.env"
-    ok "Created kimi.env (CLIProxyAPI required)"
+    ok "Created kimi.env (requires ccbridge-proxy)"
 else
     ok "kimi.env already exists, skipping"
 fi
 
 if [[ ! -f "$MODELS_DIR/hybrid.env" ]]; then
     cat > "$MODELS_DIR/hybrid.env" << 'EOF'
-# Hybrid API Profile (Custom multi-model via CLIProxyAPI)
+# Hybrid API Profile (Custom multi-model via ccbridge-proxy)
 # Configure any model combination for Opus/Sonnet/Haiku roles
-# Requires: CLIProxyAPI with appropriate model credentials
+# Requires: ccbridge-proxy with appropriate model credentials
 MODEL_AUTH_TOKEN="sk-dummy"
 MODEL_BASE_URL="http://127.0.0.1:8317"
 MODEL_HAIKU="glm-5-turbo"
@@ -435,14 +458,20 @@ MODEL_SONNET="glm-5.1"
 MODEL_OPUS="claude-opus-4-6"
 EOF
     chmod 600 "$MODELS_DIR/hybrid.env"
-    ok "Created hybrid.env (CLIProxyAPI required — configure any model combination)"
+    ok "Created hybrid.env (requires ccbridge-proxy — configure any model combination)"
 else
     ok "hybrid.env already exists, skipping"
 fi
 
 # ─── Step: Codex Account Registration ───
+# Note: OAuth login still requires CLIProxyAPI binary for now.
+# This will be replaced with a native implementation in a future version.
 if [[ -n "$CLIPROXY_BIN" ]]; then
     _codex_cred_count=0
+    for _f in "$HOME/.ccbridge/credentials/codex-"*.json; do
+        [[ -f "$_f" ]] && _codex_cred_count=$((_codex_cred_count + 1))
+    done
+    # Also check legacy path for migration
     for _f in "$HOME/.cli-proxy-api/codex-"*.json; do
         [[ -f "$_f" ]] && _codex_cred_count=$((_codex_cred_count + 1))
     done
@@ -472,7 +501,7 @@ if [[ -n "$CLIPROXY_BIN" ]]; then
                 fi
             done
             _codex_cred_count=0
-            for _f in "$HOME/.cli-proxy-api/codex-"*.json; do
+            for _f in "$HOME/.ccbridge/credentials/codex-"*.json; do
                 [[ -f "$_f" ]] && _codex_cred_count=$((_codex_cred_count + 1))
             done
             ok "Codex 계정 ${_codex_cred_count}개 등록됨"
@@ -484,163 +513,52 @@ if [[ -n "$CLIPROXY_BIN" ]]; then
     fi
 fi
 
-# ─── Step: CLIProxyAPI Auto-Configuration ───
-if [[ -n "$CLIPROXY_BIN" ]]; then
-    info "Auto-configuring CLIProxyAPI..."
+# ─── Step: Proxy Configuration & Service Start ───
+if [[ "$PROXY_READY" -eq 1 ]]; then
+    CCBRIDGE_DIR="$HOME/.ccbridge"
+    VENV_PYTHON="$CCBRIDGE_DIR/venv/bin/python3"
+    PID_FILE="$CCBRIDGE_DIR/proxy.pid"
 
-    # Detect config path
-    CLIPROXY_CONF=""
-    case "$(uname -s)" in
-        Darwin*)
-            for _p in /opt/homebrew/etc/cliproxyapi.conf /usr/local/etc/cliproxyapi.conf; do
-                [[ -f "$_p" ]] && CLIPROXY_CONF="$_p" && break
-            done
-            [[ -z "$CLIPROXY_CONF" ]] && CLIPROXY_CONF="/opt/homebrew/etc/cliproxyapi.conf"
-            ;;
-        Linux*)
-            for _p in /etc/cliproxyapi.conf /usr/local/etc/cliproxyapi.conf "$HOME/.config/cliproxyapi/cliproxyapi.conf"; do
-                [[ -f "$_p" ]] && CLIPROXY_CONF="$_p" && break
-            done
-            [[ -z "$CLIPROXY_CONF" ]] && CLIPROXY_CONF="$HOME/.config/cliproxyapi/cliproxyapi.conf"
-            ;;
-        *)
-            CLIPROXY_CONF="$HOME/.config/cliproxyapi/cliproxyapi.conf"
-            ;;
-    esac
-
-    # Fallback to user config if no write permission
-    if [[ -n "$CLIPROXY_CONF" ]]; then
-        _conf_dir="$(dirname "$CLIPROXY_CONF")"
-        if { [[ -f "$CLIPROXY_CONF" ]] && [[ ! -w "$CLIPROXY_CONF" ]]; } || \
-           { [[ ! -f "$CLIPROXY_CONF" ]] && [[ ! -w "$_conf_dir" ]]; }; then
-            CLIPROXY_CONF="$HOME/.config/cliproxyapi/cliproxyapi.conf"
+    # Inject GLM API keys from glm.env into config.yaml
+    if [[ -f "$MODELS_DIR/glm.env" ]]; then
+        _glm_key="$(grep '^MODEL_AUTH_TOKEN=' "$MODELS_DIR/glm.env" 2>/dev/null | head -1 | sed 's/^MODEL_AUTH_TOKEN="//;s/"$//')"
+        if [[ -n "$_glm_key" && "$_glm_key" != "YOUR_GLM_API_KEY_HERE" ]]; then
+            # Build api_keys list from MODEL_AUTH_TOKENS or single token
+            _glm_tokens="$(
+                grep '^MODEL_AUTH_TOKENS=' "$MODELS_DIR/glm.env" 2>/dev/null | head -1 | sed 's/^MODEL_AUTH_TOKENS="//;s/"$//' || true
+            )"
+            if [[ -z "$_glm_tokens" ]]; then
+                _glm_tokens="$_glm_key"
+            fi
+            # Update config.yaml with GLM keys
+            if command -v python3 &>/dev/null; then
+                python3 -c "
+import yaml, sys, os
+cfg_path = os.path.expanduser('~/.ccbridge/config.yaml')
+try:
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f) or {}
+except FileNotFoundError:
+    cfg = {}
+keys_str = sys.argv[1]
+cfg.setdefault('glm', {})['api_keys'] = [k.strip() for k in keys_str.split(',') if k.strip()]
+with open(cfg_path, 'w') as f:
+    yaml.dump(cfg, f, default_flow_style=False)
+" "$_glm_tokens" 2>/dev/null && ok "Updated config.yaml with GLM API keys"
+            fi
         fi
     fi
 
-    # Create or patch config
-    if [[ ! -f "$CLIPROXY_CONF" ]]; then
-        mkdir -p "$(dirname "$CLIPROXY_CONF")"
-        cat > "$CLIPROXY_CONF" <<'CONFEOF'
-# CLIProxyAPI Configuration (auto-generated by CCTeamBridge)
-listen: "127.0.0.1:8317"
-request-retry: 3
-max-retry-interval: 30
-routing:
-  strategy: "fill-first"
-quota-exceeded:
-  switch-project: true
-  switch-preview-model: true
-CONFEOF
-        ok "Created CLIProxyAPI config: $CLIPROXY_CONF"
-    else
-        _conf_content="$(cat "$CLIPROXY_CONF")"
-        _changes=()
-        _change_actions=()
-
-        # Detect needed changes (use precise patterns to avoid false positives from comments)
-        if echo "$_conf_content" | grep -qE '^[[:space:]]*strategy:[[:space:]]*"'; then
-            if ! echo "$_conf_content" | grep -qE 'strategy:[[:space:]]*"fill-first"'; then
-                _old=$(echo "$_conf_content" | grep -m1 'strategy:' | sed 's/^[[:space:]]*//')
-                _changes+=("  ${_old}  →  strategy: \"fill-first\"")
-                _change_actions+=("strategy_patch")
-            fi
-        elif echo "$_conf_content" | grep -qE '^[[:space:]]*routing:[[:space:]]*$'; then
-            _changes+=("  routing.strategy: (routing 섹션 내 키 없음)  →  \"fill-first\"")
-            _change_actions+=("strategy_insert_in_routing")
-        else
-            _changes+=("  routing.strategy: (없음)  →  \"fill-first\"")
-            _change_actions+=("strategy_add")
-        fi
-
-        if echo "$_conf_content" | grep -qE '^[[:space:]]*switch-project:[[:space:]]*(true|false)'; then
-            if ! echo "$_conf_content" | grep -qE 'switch-project:[[:space:]]*true'; then
-                _old=$(echo "$_conf_content" | grep -m1 'switch-project:' | sed 's/^[[:space:]]*//')
-                _changes+=("  ${_old}  →  switch-project: true")
-                _change_actions+=("switch_patch")
-            fi
-        elif echo "$_conf_content" | grep -qE '^[[:space:]]*quota-exceeded:[[:space:]]*$'; then
-            _changes+=("  quota-exceeded.switch-project: (quota-exceeded 섹션 내 키 없음)  →  true")
-            _change_actions+=("switch_insert_in_quota")
-        else
-            _changes+=("  quota-exceeded.switch-project: (없음)  →  true")
-            _change_actions+=("switch_add")
-        fi
-
-        if ! echo "$_conf_content" | grep -q 'request-retry:'; then
-            _changes+=("  request-retry: (없음)  →  3")
-            _change_actions+=("retry_add")
-        fi
-
-        if ! echo "$_conf_content" | grep -q 'max-retry-interval:'; then
-            _changes+=("  max-retry-interval: (없음)  →  30")
-            _change_actions+=("interval_add")
-        fi
-
-        if [[ ${#_changes[@]} -gt 0 ]]; then
-            echo ""
-            info "기존 CLIProxyAPI 설정을 감지했습니다: $CLIPROXY_CONF"
-            echo "  다음 설정을 변경합니다:"
-            for _c in "${_changes[@]}"; do
-                echo -e "    $_c"
-            done
-            echo ""
-            echo -ne "  ${BOLD}적용하시겠습니까? (기존 사용자가 아니면 Enter) [Y/n]:${RESET} "
-            _read_tty_prompt_default _confirm "Y" "CLIProxyAPI config patch prompt" "N" >/dev/null || true
-            if [[ -z "$_confirm" || "$_confirm" =~ ^[Yy] ]]; then
-                _patched=0
-                for _action in "${_change_actions[@]}"; do
-                    case "$_action" in
-                        strategy_patch)
-                            sed -i.bak 's/strategy:.*$/strategy: "fill-first"/' "$CLIPROXY_CONF"
-                            _patched=$((_patched + 1)) ;;
-                        strategy_add)
-                            printf '\nrouting:\n  strategy: "fill-first"\n' >> "$CLIPROXY_CONF"
-                            _patched=$((_patched + 1)) ;;
-                        strategy_insert_in_routing)
-                            awk '
-                                BEGIN { inserted=0 }
-                                {
-                                    print
-                                    if (!inserted && $0 ~ /^[[:space:]]*routing:[[:space:]]*$/) {
-                                        print "  strategy: \"fill-first\""
-                                        inserted=1
-                                    }
-                                }
-                            ' "$CLIPROXY_CONF" > "${CLIPROXY_CONF}.tmp" && mv "${CLIPROXY_CONF}.tmp" "$CLIPROXY_CONF"
-                            _patched=$((_patched + 1)) ;;
-                        switch_patch)
-                            sed -i.bak 's/switch-project:.*$/switch-project: true/' "$CLIPROXY_CONF"
-                            _patched=$((_patched + 1)) ;;
-                        switch_add)
-                            printf '\nquota-exceeded:\n  switch-project: true\n  switch-preview-model: true\n' >> "$CLIPROXY_CONF"
-                            _patched=$((_patched + 1)) ;;
-                        switch_insert_in_quota)
-                            awk '
-                                BEGIN { inserted=0 }
-                                {
-                                    print
-                                    if (!inserted && $0 ~ /^[[:space:]]*quota-exceeded:[[:space:]]*$/) {
-                                        print "  switch-project: true"
-                                        inserted=1
-                                    }
-                                }
-                            ' "$CLIPROXY_CONF" > "${CLIPROXY_CONF}.tmp" && mv "${CLIPROXY_CONF}.tmp" "$CLIPROXY_CONF"
-                            _patched=$((_patched + 1)) ;;
-                        retry_add)
-                            printf 'request-retry: 3\n' >> "$CLIPROXY_CONF"
-                            _patched=$((_patched + 1)) ;;
-                        interval_add)
-                            printf 'max-retry-interval: 30\n' >> "$CLIPROXY_CONF"
-                            _patched=$((_patched + 1)) ;;
-                    esac
-                done
-                rm -f "${CLIPROXY_CONF}.bak"
-                ok "CLIProxyAPI 설정 ${_patched}건 변경 완료: $CLIPROXY_CONF"
-            else
-                warn "CLIProxyAPI 설정 변경을 건너뛰었습니다"
-            fi
-        else
-            ok "CLIProxyAPI config already correct: $CLIPROXY_CONF"
+    # Migrate legacy CLIProxyAPI credentials if present
+    if [[ -d "$HOME/.cli-proxy-api" ]]; then
+        _migrated=0
+        mkdir -p "$CCBRIDGE_DIR/credentials"
+        for _f in "$HOME/.cli-proxy-api/codex-"*.json; do
+            [[ -f "$_f" ]] || continue
+            cp "$_f" "$CCBRIDGE_DIR/credentials/" && _migrated=$((_migrated + 1))
+        done
+        if [[ $_migrated -gt 0 ]]; then
+            ok "Migrated ${_migrated} credential(s) from ~/.cli-proxy-api/ to ~/.ccbridge/credentials/"
         fi
     fi
 
@@ -648,7 +566,7 @@ CONFEOF
     _priority_changes=()
     _priority_files=()
     _priority_values=()
-    for _cred in "$HOME/.cli-proxy-api/codex-"*.json; do
+    for _cred in "$CCBRIDGE_DIR/credentials/codex-"*.json; do
         [[ -f "$_cred" ]] || continue
         _name="$(basename "$_cred" | tr '[:upper:]' '[:lower:]')"
         _priority=""
@@ -659,7 +577,7 @@ CONFEOF
         esac
         _priority_files+=("$_cred")
         _priority_values+=("$_priority")
-        _priority_changes+=("$(basename "$_cred"): priority → ${_priority}")
+        _priority_changes+=("$(basename "$_cred"): priority -> ${_priority}")
     done
 
     if [[ ${#_priority_changes[@]} -gt 0 ]]; then
@@ -701,62 +619,97 @@ finally:
         fi
     fi
 
-    # Start/restart CLIProxyAPI service
+    # Start/restart the Python proxy service
+    info "Starting ccbridge-proxy..."
+
+    # Stop any existing proxy process
+    if [[ -f "$PID_FILE" ]]; then
+        _old_pid="$(cat "$PID_FILE" 2>/dev/null)"
+        if [[ -n "$_old_pid" ]] && kill -0 "$_old_pid" 2>/dev/null; then
+            kill "$_old_pid" 2>/dev/null
+            sleep 1
+        fi
+        rm -f "$PID_FILE"
+    fi
+
     case "$(uname -s)" in
         Darwin*)
-            if command -v brew &>/dev/null; then
-                if brew services list 2>/dev/null | grep -Eq '^cliproxyapi[[:space:]]+started'; then
-                    brew services restart cliproxyapi >/dev/null 2>&1
-                    ok "Restarted CLIProxyAPI service (brew)"
-                else
-                    brew services start cliproxyapi >/dev/null 2>&1
-                    ok "Started CLIProxyAPI service (brew)"
-                fi
-            else
-                warn "Homebrew not found — start CLIProxyAPI manually: $CLIPROXY_BIN"
-            fi
+            # Use launchd plist for macOS
+            _plist_label="com.ccbridge.proxy"
+            _plist_path="$HOME/Library/LaunchAgents/${_plist_label}.plist"
+            mkdir -p "$HOME/Library/LaunchAgents"
+
+            # Unload existing if present
+            launchctl unload "$_plist_path" 2>/dev/null || true
+
+            cat > "$_plist_path" << PLEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${_plist_label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${VENV_PYTHON}</string>
+        <string>-m</string>
+        <string>proxy</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>${CCBRIDGE_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${CCBRIDGE_DIR}/proxy.log</string>
+    <key>StandardErrorPath</key>
+    <string>${CCBRIDGE_DIR}/proxy.log</string>
+</dict>
+</plist>
+PLEOF
+            launchctl load "$_plist_path" 2>/dev/null
+            ok "Started ccbridge-proxy via launchd"
             ;;
         Linux*)
             if command -v systemctl &>/dev/null && systemctl --user list-unit-files >/dev/null 2>&1; then
-                # Create systemd service if missing
-                if [[ ! -f "$HOME/.config/systemd/user/cliproxyapi.service" ]]; then
-                    mkdir -p "$HOME/.config/systemd/user"
-                    cat > "$HOME/.config/systemd/user/cliproxyapi.service" <<SVCEOF
+                # Create systemd user service
+                mkdir -p "$HOME/.config/systemd/user"
+                cat > "$HOME/.config/systemd/user/ccbridge-proxy.service" << SVCEOF
 [Unit]
-Description=CLIProxyAPI Service
+Description=CCTeamBridge Proxy Service
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${CLIPROXY_BIN}
+ExecStart=${VENV_PYTHON} -m proxy
+WorkingDirectory=${CCBRIDGE_DIR}
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=default.target
 SVCEOF
-                    systemctl --user daemon-reload
-                    ok "Created systemd user service"
-                fi
-                systemctl --user enable cliproxyapi >/dev/null 2>&1
-                if systemctl --user is-active cliproxyapi >/dev/null 2>&1; then
-                    systemctl --user restart cliproxyapi >/dev/null 2>&1
-                    ok "Restarted CLIProxyAPI service (systemd)"
+                systemctl --user daemon-reload
+                systemctl --user enable ccbridge-proxy >/dev/null 2>&1
+                if systemctl --user is-active ccbridge-proxy >/dev/null 2>&1; then
+                    systemctl --user restart ccbridge-proxy >/dev/null 2>&1
+                    ok "Restarted ccbridge-proxy service (systemd)"
                 else
-                    systemctl --user start cliproxyapi >/dev/null 2>&1
-                    ok "Started CLIProxyAPI service (systemd)"
+                    systemctl --user start ccbridge-proxy >/dev/null 2>&1
+                    ok "Started ccbridge-proxy service (systemd)"
                 fi
             else
-                # WSL or no systemd
-                pkill -xf -- "$CLIPROXY_BIN" 2>/dev/null || true
+                # WSL or no systemd - use nohup
+                mkdir -p "$CCBRIDGE_DIR"
+                nohup "$VENV_PYTHON" -m proxy > "$CCBRIDGE_DIR/proxy.log" 2>&1 &
+                echo $! > "$PID_FILE"
                 sleep 1
-                mkdir -p "$HOME/.cache"
-                nohup "$CLIPROXY_BIN" > "$HOME/.cache/cliproxyapi.log" 2>&1 &
-                sleep 1
-                if pgrep -xf "$CLIPROXY_BIN" >/dev/null 2>&1; then
-                    ok "Started CLIProxyAPI in background"
+                _proxy_pid="$(cat "$PID_FILE" 2>/dev/null)"
+                if [[ -n "$_proxy_pid" ]] && kill -0 "$_proxy_pid" 2>/dev/null; then
+                    ok "Started ccbridge-proxy in background (PID: $_proxy_pid)"
                 else
-                    warn "CLIProxyAPI background start may have failed (check $HOME/.cache/cliproxyapi.log)"
+                    warn "ccbridge-proxy background start may have failed (check $CCBRIDGE_DIR/proxy.log)"
                 fi
             fi
             ;;
@@ -775,9 +728,9 @@ SVCEOF
         _health_attempts=$((_health_attempts + 1))
     done
     if ((_health_ok)); then
-        ok "CLIProxyAPI responding on port 8317"
+        ok "ccbridge-proxy responding on port 8317"
     else
-        warn "CLIProxyAPI not responding on port 8317 after ${_health_max}s (may need codex-login first)"
+        warn "ccbridge-proxy not responding on port 8317 after ${_health_max}s"
     fi
     echo ""
 fi
@@ -917,54 +870,59 @@ cdoctor() {
         _doctor_err "Shell function block not found in ~/.zshrc or ~/.bashrc"
     fi
 
-    local cliproxy_bin=""
-    for p in \
-        "\$(command -v cliproxyapi 2>/dev/null)" \
-        "\$(command -v cli-proxy-api 2>/dev/null)" \
-        /usr/local/bin/cliproxyapi \
-        /usr/local/bin/cli-proxy-api \
-        /opt/homebrew/bin/cliproxyapi \
-        /opt/homebrew/bin/cli-proxy-api \
-        /usr/bin/cliproxyapi \
-        /usr/bin/cli-proxy-api \
-        /snap/bin/cliproxyapi \
-        /snap/bin/cli-proxy-api \
-        "\$HOME/.local/bin/cliproxyapi" \
-        "\$HOME/.local/bin/cli-proxy-api" \
-        "\$HOME/bin/cliproxyapi" \
-        "\$HOME/bin/cli-proxy-api" \
-        "\$HOME/go/bin/cliproxyapi" \
-        "\$HOME/go/bin/cli-proxy-api"; do
-        if [[ -n "\$p" && -x "\$p" ]]; then
-            cliproxy_bin="\$p"
-            break
-        fi
-    done
+    local _proxy_venv="\$HOME/.ccbridge/venv/bin/python3"
+    if [[ -f "\$_proxy_venv" ]]; then
+        _doctor_ok "ccbridge-proxy venv found: \$_proxy_venv"
 
-    if [[ -n "\$cliproxy_bin" ]]; then
-        _doctor_ok "CLIProxyAPI binary found: \${cliproxy_bin}"
-
-        if [[ "\$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
-            if brew services list 2>/dev/null | grep -Eq '^cliproxyapi[[:space:]]+started'; then
-                _doctor_ok "CLIProxyAPI service started (brew services)"
-            else
-                _doctor_warn "brew services reports cliproxyapi not started"
-            fi
-        elif command -v systemctl >/dev/null 2>&1; then
-            if systemctl --user is-active cliproxyapi >/dev/null 2>&1; then
-                _doctor_ok "CLIProxyAPI service active (systemctl --user)"
-            else
-                if [[ -r /proc/version ]] && grep -qiE '(microsoft|wsl)' /proc/version; then
-                    _doctor_warn "WSL detected and cliproxyapi service is not active. systemd may be disabled; run manually."
-                else
-                    _doctor_warn "cliproxyapi service is not active (systemctl --user)"
-                fi
-            fi
+        # Check feature flag
+        if [[ "\${CCBRIDGE_PROXY_ENABLED:-1}" == "1" || "\${CCBRIDGE_PROXY_ENABLED:-true}" == "true" ]]; then
+            _doctor_ok "CCBRIDGE_PROXY_ENABLED=true"
         else
-            _doctor_warn "No service manager detected. Start CLIProxyAPI manually."
+            _doctor_warn "CCBRIDGE_PROXY_ENABLED=false (proxy disabled)"
+        fi
+
+        # Check if proxy process is running
+        local _proxy_running=0
+        if [[ -f "\$HOME/.ccbridge/proxy.pid" ]]; then
+            local _pid="\$(cat "\$HOME/.ccbridge/proxy.pid" 2>/dev/null)"
+            if [[ -n "\$_pid" ]] && kill -0 "\$_pid" 2>/dev/null; then
+                _proxy_running=1
+            fi
+        fi
+        if [[ "\$_proxy_running" -eq 0 ]]; then
+            # Also check via pgrep or systemctl/launchd
+            case "\$(uname -s)" in
+                Darwin*)
+                    if launchctl list 2>/dev/null | grep -q 'com.ccbridge.proxy'; then
+                        _proxy_running=1
+                    fi
+                    ;;
+                Linux*)
+                    if command -v systemctl &>/dev/null && systemctl --user is-active ccbridge-proxy >/dev/null 2>&1; then
+                        _proxy_running=1
+                    elif pgrep -f "python3 -m proxy" >/dev/null 2>&1; then
+                        _proxy_running=1
+                    fi
+                    ;;
+            esac
+        fi
+
+        if [[ "\$_proxy_running" -eq 1 ]]; then
+            _doctor_ok "ccbridge-proxy process is running"
+        else
+            _doctor_warn "ccbridge-proxy process is not running"
+        fi
+
+        # Check health endpoint
+        local _health_resp
+        _health_resp="\$(curl -s --connect-timeout 2 http://127.0.0.1:8317/v1/models -H "Authorization: Bearer sk-dummy" 2>/dev/null)"
+        if [[ -n "\$_health_resp" ]]; then
+            _doctor_ok "ccbridge-proxy responding on port 8317"
+        else
+            _doctor_warn "ccbridge-proxy not responding on port 8317"
         fi
     else
-        _doctor_warn "CLIProxyAPI binary not found (required for Codex/Kimi profiles)"
+        _doctor_warn "ccbridge-proxy venv not found (required for Codex/Kimi profiles)"
     fi
 
     echo ""
@@ -980,6 +938,28 @@ cdoctor() {
 }
 
 # --- ccd: Claude Code dangerously-skip-permissions ---
+_ccbridge_ensure_proxy() {
+    # Quick health check — if proxy responds, we're done
+    if curl -s --connect-timeout 1 http://127.0.0.1:8317/v1/models >/dev/null 2>&1; then
+        return 0
+    fi
+    # Try to start proxy
+    local _venv_python="\$HOME/.ccbridge/venv/bin/python3"
+    if [[ ! -f "\$_venv_python" ]]; then
+        return 1
+    fi
+    "\$_venv_python" -m proxy >/dev/null 2>&1 &
+    local _wait=0
+    while [[ \$_wait -lt 5 ]]; do
+        sleep 1
+        if curl -s --connect-timeout 1 http://127.0.0.1:8317/v1/models >/dev/null 2>&1; then
+            return 0
+        fi
+        _wait=\$((\_wait + 1))
+    done
+    return 1
+}
+
 function ccd() {
     local MODEL=""
     local ARGS=()
@@ -995,6 +975,12 @@ function ccd() {
     done
     if [[ -n "\$MODEL" ]]; then
         _claude_load_model "\$MODEL" || return 1
+        # Ensure proxy is running for proxy-dependent models
+        if [[ "\$MODEL_BASE_URL" == *"8317"* ]]; then
+            if ! _ccbridge_ensure_proxy; then
+                echo "Warning: ccbridge-proxy not available. Start manually: ~/.ccbridge/venv/bin/python3 -m proxy"
+            fi
+        fi
     else
         _claude_unset_model_vars
     fi
@@ -1027,7 +1013,7 @@ echo "  cdoctor                      # 진단 도구"
 echo ""
 echo -e "${BOLD}Configure your API keys:${RESET}"
 echo "  vim ~/.claude-models/glm.env      # Set GLM API key"
-echo "  vim ~/.claude-models/codex.env    # Set Codex (needs CLIProxyAPI)"
+echo "  vim ~/.claude-models/codex.env    # Set Codex"
 echo ""
 echo -e "${BOLD}Add a new model:${RESET}"
 echo "  Create ~/.claude-models/<name>.env with:"

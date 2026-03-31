@@ -46,6 +46,48 @@ if [[ -d "$HOME/.claude-models/.hybrid-rr" ]]; then
     ok "Removed round-robin state directory"
 fi
 
+# Stop ccbridge-proxy if running
+if [[ -f "$HOME/.ccbridge/proxy.pid" ]]; then
+    _proxy_pid="$(head -1 "$HOME/.ccbridge/proxy.pid" 2>/dev/null)"
+    if [[ -n "$_proxy_pid" ]] && kill -0 "$_proxy_pid" 2>/dev/null; then
+        kill "$_proxy_pid" 2>/dev/null
+        sleep 1
+        kill -9 "$_proxy_pid" 2>/dev/null || true
+        ok "Stopped ccbridge-proxy (pid=$_proxy_pid)"
+    fi
+    rm -f "$HOME/.ccbridge/proxy.pid"
+fi
+
+# Remove launchd plist (macOS)
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    _plist="$HOME/Library/LaunchAgents/com.ccbridge.proxy.plist"
+    if [[ -f "$_plist" ]]; then
+        launchctl unload "$_plist" 2>/dev/null || true
+        rm -f "$_plist"
+        ok "Removed launchd plist"
+    fi
+fi
+
+# Remove systemd service (Linux)
+if [[ "$(uname -s)" == "Linux" ]] && [[ -f "$HOME/.config/systemd/user/ccbridge-proxy.service" ]]; then
+    systemctl --user stop ccbridge-proxy 2>/dev/null || true
+    systemctl --user disable ccbridge-proxy 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/ccbridge-proxy.service"
+    systemctl --user daemon-reload 2>/dev/null || true
+    ok "Removed systemd service"
+fi
+
+# Ask about removing ~/.ccbridge/
+echo ""
+echo -ne "${YELLOW}Remove proxy data (~/.ccbridge/ including venv, config, credentials)? [y/N]:${RESET} "
+read -r _remove_ccbridge </dev/tty || _remove_ccbridge="N"
+if [[ "$_remove_ccbridge" =~ ^[Yy] ]]; then
+    rm -rf "$HOME/.ccbridge"
+    ok "Removed ~/.ccbridge/"
+else
+    info "Kept ~/.ccbridge/ (config and credentials preserved)"
+fi
+
 # Remove tmux hook script (legacy)
 rm -f "$HOME/.tmux-hybrid-hook.sh"
 

@@ -10,32 +10,7 @@ macOS, Linux, WSL 모두 지원합니다.
 
 ## 설치
 
-### 1. CLIProxyAPI 설치 (Codex/Kimi 사용 시 필수)
-
-**macOS:**
-
-```bash
-brew install cliproxyapi
-```
-
-**Linux / WSL:**
-
-외부 스크립트 원격 실행 명령은 제공하지 않습니다.
-CLIProxyAPI 공식 저장소/공식 문서의 수동 설치 절차를 따라 설치하세요.
-
-설치 후 OAuth 계정 등록 (계정마다 반복):
-
-```bash
-cliproxyapi -codex-login    # Codex 계정
-cliproxyapi -claude-login   # Claude 계정 (hybrid 모델에 필요)
-```
-
-> 파일명에 `-plus` 또는 `-pro`를 포함하면 우선순위가 자동 설정됩니다.
-> CLIProxyAPI는 Codex/Kimi 사용할 때만 필요하며, 미설치 상태에서도 GLM-only로 진행할 수 있습니다.
-> 설치 스크립트는 CLIProxyAPI 미설치 시 설치를 제안합니다. macOS는 brew 자동 설치를 시도할 수 있고, Linux/WSL은 자동 실행 없이 수동 설치 안내 후 GLM-only로 계속 진행합니다.
-> 비대화형(non-interactive, `/dev/tty` 없음) 환경에서는 CLIProxyAPI 자동 설치/설정 패치를 기본적으로 건너뜁니다.
-
-### 2. CCTeamBridge 설치
+### 1. CCTeamBridge 설치
 
 ```bash
 curl -fsSLo ./install.sh https://raw.githubusercontent.com/binee108/CCTeamBridge/main/install.sh
@@ -55,11 +30,11 @@ bash ./install.sh --force
 
 **끝!** 설치 스크립트가 아래를 모두 자동 수행합니다:
 
+- Python 3.9+ 감지 및 가상환경 생성 (`~/.ccbridge/venv/`)
+- aiohttp, pyyaml 의존성 설치
+- ccbridge-proxy 자동 시작 (`~/.ccbridge/`)
 - 모델 프로필 생성 (`~/.claude-models/codex.env`, `glm.env`, `kimi.env`, `hybrid.env`)
-- CLIProxyAPI 설정 파일 자동 구성 (`routing: fill-first`, `quota-exceeded: switch-project` 등)
 - Codex 멀티 계정 우선순위 자동 설정 (`-plus` → 100, `-pro` → 0)
-- CLIProxyAPI 설치 제안/설정 (필요 시), 서비스 시작/재시작
-  - 비대화형에서는 CLIProxyAPI 자동 설치/자동 패치를 기본 건너뜀
 - 셸 함수 설치 (`ccd`, `cdoctor`)
 
 셸 재시작 또는:
@@ -67,6 +42,10 @@ bash ./install.sh --force
 ```bash
 source ~/.zshrc  # 또는 source ~/.bashrc
 ```
+
+### 2. OAuth 로그인 (Codex/Kimi 사용 시)
+
+> **마이그레이션 참고:** OAuth 로그인은 현재 CLIProxyAPI 바이너리가 필요합니다. `cliproxyapi -codex-login`으로 계정을 등록하세요. 자격 증명은 자동으로 `~/.ccbridge/credentials/`로 마이그레이션됩니다.
 
 ---
 
@@ -96,20 +75,21 @@ cdoctor                     # 전체 설정 상태 확인
 
 | 프로필 | 파일 | 비고 |
 |--------|------|------|
-| GLM | `glm.env` | API 키 직접 입력 필요 |
-| Codex | `codex.env` | CLIProxyAPI 필요, 자동 생성됨 |
-| Kimi | `kimi.env` | CLIProxyAPI 필요, 자동 생성됨 |
-| Hybrid | `hybrid.env` | CLIProxyAPI 필요, 자유로운 모델 조합 |
+| GLM | `glm.env` | z.ai API key 직접 입력 |
+| Codex | `codex.env` | ccbridge-proxy 경유 |
+| Kimi | `kimi.env` | ccbridge-proxy 경유 |
+| Hybrid | `hybrid.env` | ccbridge-proxy 경유, 자유로운 모델 조합 |
 
 ### Codex 계정 등록
 
-CLIProxyAPI 설치 후 OAuth 로그인으로 계정을 등록합니다.
+> **참고:** OAuth 로그인은 현재 CLIProxyAPI 바이너리가 필요합니다. `cliproxyapi -codex-login`으로 계정을 등록하면 자격 증명이 자동으로 `~/.ccbridge/credentials/`로 마이그레이션됩니다.
 
 **단일 계정:**
 
 ```bash
+# CLIProxyAPI 필요 (OAuth 로그인 전용)
 cliproxyapi -codex-login
-# 브라우저에서 로그인 → ~/.cli-proxy-api/codex-<계정ID>.json 생성됨
+# 브라우저에서 로그인 → 자격 증명이 ~/.ccbridge/credentials/로 마이그레이션됨
 ```
 
 **멀티 계정:**
@@ -119,10 +99,10 @@ cliproxyapi -codex-login
 ```bash
 cliproxyapi -codex-login
 # 로그인 완료 후 파일명 변경:
-mv ~/.cli-proxy-api/codex-<계정ID>.json ~/.cli-proxy-api/codex-work-plus.json
+mv ~/.ccbridge/credentials/codex-<계정ID>.json ~/.ccbridge/credentials/codex-work-plus.json
 
 cliproxyapi -codex-login
-mv ~/.cli-proxy-api/codex-<계정ID>.json ~/.cli-proxy-api/codex-personal-pro.json
+mv ~/.ccbridge/credentials/codex-<계정ID>.json ~/.ccbridge/credentials/codex-personal-pro.json
 ```
 
 | 파일명 패턴 | 자동 우선순위 | 동작 |
@@ -130,37 +110,28 @@ mv ~/.cli-proxy-api/codex-<계정ID>.json ~/.cli-proxy-api/codex-personal-pro.js
 | `codex-*-plus.json` | `priority: 100` | 먼저 사용 |
 | `codex-*-pro.json` | `priority: 0` | Plus 소진 시 fallback |
 
-> 설치 스크립트가 파일명을 감지하여 우선순위를 자동 설정합니다.
-> quota 초과 시 `switch-project: true` 설정에 의해 다음 계정으로 자동 전환됩니다.
+> quota 초과 시 ccbridge-proxy가 자동으로 다음 계정으로 전환합니다 (fill-first 전략, 소진 키 1시간 쿨다운).
 
 ### GLM API 키 설정
 
 API 키 발급: https://z.ai/manage-apikey/apikey-list
 
-**단일 키:**
+`~/.ccbridge/config.yaml`을 편집합니다:
 
-```bash
-vim ~/.claude-models/glm.env
+```yaml
+glm:
+  base_url: "https://api.z.ai/api/anthropic"
+  api_keys:
+    - "your-key-1"
+    - "your-key-2"
 ```
 
-```bash
-MODEL_AUTH_TOKEN="your-glm-api-key"
-```
-
-**멀티 키:**
-
-여러 키를 쉼표로 구분하여 등록할 수 있습니다:
-
-```bash
-MODEL_AUTH_TOKENS="GLM_KEY_1,GLM_KEY_2,GLM_KEY_3"
-```
-
-- `MODEL_AUTH_TOKENS` 설정 시 `MODEL_AUTH_TOKEN`보다 우선합니다
-- 첫 번째 키가 사용됩니다
+- 여러 키 등록 시 fill-first 전략으로 자동 순환합니다
+- 소진된 키는 1시간 쿨다운 후 재사용됩니다
 
 ### Hybrid 모델 설정
 
-Hybrid 모델은 CLIProxyAPI를 통해 여러 모델을 자유롭게 조합할 수 있는 프로필입니다. Opus/Sonnet/Haiku 각 역할에 원하는 모델을 설정하세요.
+Hybrid 모델은 ccbridge-proxy를 통해 여러 모델을 자유롭게 조합할 수 있는 프로필입니다. Opus/Sonnet/Haiku 각 역할에 원하는 모델을 설정하세요.
 
 **설정 예시:**
 
@@ -182,17 +153,10 @@ MODEL_OPUS="claude-opus-4-6"    # 복잡한 추론용
 
 **사전 요구사항:**
 
-1. CLIProxyAPI 설치 및 실행
-2. 사용하려는 모델의 인증 정보를 CLIProxyAPI에 등록
-   ```bash
-   cliproxyapi -claude-login    # Claude OAuth
-   cliproxyapi -codex-login     # Codex OAuth
-   # GLM 등 기타 모델은 cliproxyapi.conf에 API 키 등록
-   ```
-3. CLIProxyAPI 재시작:
-   ```bash
-   brew services restart cliproxyapi
-   ```
+1. ccbridge-proxy 실행 (install.sh로 자동 설정됨)
+2. 사용하려는 모델의 인증 정보를 등록
+   - Codex/Kimi: OAuth 로그인 후 자동 마이그레이션
+   - GLM: `~/.ccbridge/config.yaml`에 API 키 등록
 
 > 설치 스크립트가 `hybrid.env`를 자동 생성하지만, 모델 인증 정보 등록은 수동으로 진행해야 합니다.
 
@@ -216,8 +180,11 @@ MODEL_OPUS="model-name"
 
 | 플랫폼 | 시작 | 중지 | 재시작 |
 |--------|------|------|--------|
-| macOS | `brew services start cliproxyapi` | `brew services stop cliproxyapi` | `brew services restart cliproxyapi` |
-| Linux | `systemctl --user start cliproxyapi` | `systemctl --user stop cliproxyapi` | `systemctl --user restart cliproxyapi` |
+| macOS | `launchctl load ~/Library/LaunchAgents/com.ccbridge.proxy.plist` | `launchctl unload ~/Library/LaunchAgents/com.ccbridge.proxy.plist` | unload 후 load |
+| Linux | `systemctl --user start ccbridge-proxy` | `systemctl --user stop ccbridge-proxy` | `systemctl --user restart ccbridge-proxy` |
+| WSL | 백그라운드 프로세스 (install.sh가 자동 관리) | `pkill -f "python3 -m proxy"` | install.sh 재실행 |
+
+> install.sh가 플랫폼에 맞게 서비스를 자동 구성하고 시작합니다.
 
 ---
 
@@ -227,8 +194,14 @@ MODEL_OPUS="model-name"
 cdoctor                                          # 전체 진단
 curl -s http://127.0.0.1:8317/v1/models \
   -H "Authorization: Bearer sk-dummy"            # API 테스트
-pgrep -f cliproxyapi                             # 프로세스 확인
+pgrep -f "python3 -m proxy"                      # 프로세스 확인
 ```
+
+---
+
+## 아키텍처
+
+ccbridge-proxy는 aiohttp 기반 Python 프록시로 (~800 LOC), 순수 Anthropic API 패스스루를 제공합니다. 모든 요청을 Anthropic 호환 형식으로 전달하며, 멀티 키 순환(fill-first, 1시간 쿨다운)과 계정 자동 전환을 지원합니다.
 
 ---
 
