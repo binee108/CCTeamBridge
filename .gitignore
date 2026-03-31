@@ -2,3 +2,4 @@
 .omx/
 .claude/
 AGENTS.md
+__pycache__/
